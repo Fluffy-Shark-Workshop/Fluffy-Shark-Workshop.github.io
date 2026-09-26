@@ -1,0 +1,17 @@
+{% if posts %}
+<ul class="post-list">
+  {% for p in posts %}
+  <li class="post-item">
+    <a class="post-item-title" href="{{ p.url }}">{% if p.pinned %}<span class="pin" title="고정된 글">📌</span>{% endif %}{% if p.draft %}<span class="badge-draft">초안</span>{% endif %}{{ p.title }}</a>
+    {% if p.excerpt %}<p class="post-item-excerpt">{{ p.excerpt }}</p>{% endif %}
+    <div class="post-item-meta">
+      <time datetime="{{ p.date_iso }}">{{ p.date_display }}</time>
+      <a class="cat" href="{{ p.category_trail[-1].url }}">{{ p.category.replace('/', ' › ') }}</a>
+      {% for tag in p.tag_objs %}<a class="tag" href="{{ tag.url }}">#{{ tag.name }}</a>{% endfor %}
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">아직 글이 없습니다.</p>
+{% endif %}

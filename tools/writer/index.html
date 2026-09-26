@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="writer-token" content="{{TOKEN}}">
+<meta name="writer-base" content="{{BASE}}">
+<title>블로그 글쓰기</title>
+<link rel="icon" type="image/png" href="{{BASE}}/static/img/favicon.png">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="/__writer/writer.css">
+<script defer src="/__writer/writer.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <img src="{{BASE}}/static/img/avatar.jpg" alt="" width="34" height="34">
+    <span>블로그 글쓰기</span>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" type="button" role="tab" data-tab="new" aria-selected="true">새 글</button>
+    <button class="tab" type="button" role="tab" data-tab="manage" aria-selected="false">글 관리</button>
+  </nav>
+  <div class="top-actions">
+    <a class="btn ghost" href="{{BASE}}/" target="_blank" rel="noopener">미리보기 ↗</a>
+    <span class="pending" id="pending" hidden></span>
+    <button class="btn primary" type="button" id="publish-all">게시하기</button>
+    <button class="btn ghost" type="button" id="settings-btn">설정</button>
+    <button class="btn ghost" type="button" id="quit-btn">종료</button>
+  </div>
+</header>
+
+<main>
+  <!-- ======================= 새 글 ======================= -->
+  <section class="panel" id="tab-new">
+    <div class="new-grid">
+      <div class="col-main">
+        <div class="dropzone" id="dropzone">
+          <div class="dz-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="30" height="30"><path d="M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="dz-title">파일을 여기에 끌어다 놓으세요</div>
+          <div class="dz-sub">Markdown · HTML · PDF · 이미지. 여러 개를 넣으면 넣은 순서대로 본문에 들어갑니다.</div>
+          <div class="dz-actions">
+            <button class="btn" type="button" id="pick-files">파일 선택</button>
+            <button class="btn ghost" type="button" id="paste-paths">경로 붙여넣기</button>
+          </div>
+        </div>
+        <ol class="items" id="items" aria-label="올릴 파일"></ol>
+        <label class="field">
+          <span class="label">본문 <em>선택 · 첨부 파일 위에 들어갈 글. Markdown과 $수식$을 쓸 수 있습니다.</em></span>
+          <textarea id="intro" rows="5" placeholder="짧은 설명이나 메모를 적어도 되고, 비워 둬도 됩니다."></textarea>
+        </label>
+      </div>
+
+      <aside class="col-side">
+        <label class="field">
+          <span class="label">제목</span>
+          <input id="title" type="text" placeholder="파일을 넣으면 자동으로 채워집니다">
+        </label>
+        <label class="field">
+          <span class="label">날짜</span>
+          <input id="date" type="datetime-local">
+        </label>
+        <div class="field">
+          <span class="label">카테고리 <em>하위 카테고리는 / 로 구분</em></span>
+          <div class="suggest-wrap"><input id="category" type="text" placeholder="예: 공부/Visual SLAM" autocomplete="off" spellcheck="false"></div>
+        </div>
+        <div class="field">
+          <span class="label">태그 <em>Enter 또는 쉼표로 추가 · 초성 검색 가능</em></span>
+          <div class="chips-input" id="tags"><input type="text" placeholder="태그 입력" autocomplete="off" spellcheck="false"></div>
+        </div>
+        <label class="field">
+          <span class="label">설명 <em>선택 · 글 목록에 보일 한 줄</em></span>
+          <input id="description" type="text">
+        </label>
+        <label class="check"><input id="draft" type="checkbox"> 초안으로 저장 <em>(게시해도 블로그에는 보이지 않음)</em></label>
+        <div class="actions">
+          <button class="btn" type="button" id="save-preview">저장하고 미리보기</button>
+          <button class="btn primary" type="button" id="save-publish">저장하고 게시하기</button>
+        </div>
+        <div class="result" id="result" hidden></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ======================= 글 관리 ======================= -->
+  <section class="panel" id="tab-manage" hidden>
+    <div class="manage-grid">
+      <div class="manage-main">
+        <div class="manage-top">
+          <input id="post-filter" type="search" placeholder="제목 · 카테고리 · 태그로 찾기 (초성 가능)" autocomplete="off">
+          <span class="muted" id="post-count"></span>
+        </div>
+        <div class="table-wrap">
+          <table class="post-table">
+            <thead><tr><th>날짜</th><th>제목</th><th>카테고리</th><th>태그</th><th></th></tr></thead>
+            <tbody id="post-rows"></tbody>
+          </table>
+        </div>
+      </div>
+      <aside class="rename-box">
+        <h3>이름 한꺼번에 바꾸기</h3>
+        <p class="muted small">모든 글의 태그나 카테고리 이름을 한 번에 바꿉니다. 이미 있는 이름으로 바꾸면 둘이 합쳐집니다.</p>
+        <div class="field">
+          <span class="label">태그</span>
+          <div class="suggest-wrap"><input id="rename-tag-from" type="text" placeholder="기존 태그" autocomplete="off"></div>
+          <div class="suggest-wrap"><input id="rename-tag-to" type="text" placeholder="새 이름" autocomplete="off"></div>
+          <button class="btn" type="button" id="rename-tag">태그 이름 바꾸기</button>
+        </div>
+        <div class="field">
+          <span class="label">카테고리 <em>하위 카테고리도 함께 옮겨집니다</em></span>
+          <div class="suggest-wrap"><input id="rename-cat-from" type="text" placeholder="기존 카테고리" autocomplete="off"></div>
+          <div class="suggest-wrap"><input id="rename-cat-to" type="text" placeholder="새 이름 (예: 공부/SLAM)" autocomplete="off"></div>
+          <button class="btn" type="button" id="rename-cat">카테고리 이름 바꾸기</button>
+        </div>
+        <p class="muted small">사이드바의 카테고리 순서는 <code>site.yml</code>의 <code>category_order</code>로 정합니다.</p>
+      </aside>
+    </div>
+  </section>
+</main>
+
+<!-- ======================= 글 수정 ======================= -->
+<div class="modal" id="edit-modal" hidden>
+  <div class="modal-card wide" role="dialog" aria-modal="true" aria-labelledby="edit-heading">
+    <header class="modal-head">
+      <h2 id="edit-heading">글 수정</h2>
+      <button class="icon-btn" type="button" data-close aria-label="닫기">✕</button>
+    </header>
+    <div class="modal-body edit-grid">
+      <div class="edit-main">
+        <label class="field">
+          <span class="label">본문 <em>index.md · 첨부 파일은 ![](파일이름) 으로 넣습니다</em></span>
+          <textarea id="edit-body" rows="16" spellcheck="false"></textarea>
+        </label>
+        <div class="field">
+          <span class="label">파일 추가 <em>본문 끝에 붙습니다</em></span>
+          <div class="dropzone compact" id="edit-drop">
+            여기에 끌어다 놓거나 <button class="btn small" type="button" id="edit-pick">파일 선택</button>
+          </div>
+          <ol class="items" id="edit-items"></ol>
+        </div>
+        <details class="files-box"><summary>이 글의 파일 <span id="edit-files-count"></span></summary><ul id="edit-files"></ul></details>
+      </div>
+      <div class="edit-side">
+        <label class="field"><span class="label">제목</span><input id="edit-title" type="text"></label>
+        <label class="field"><span class="label">날짜</span><input id="edit-date" type="datetime-local"></label>
+        <div class="field">
+          <span class="label">카테고리</span>
+          <div class="suggest-wrap"><input id="edit-category" type="text" autocomplete="off" spellcheck="false"></div>
+        </div>
+        <div class="field">
+          <span class="label">태그</span>
+          <div class="chips-input" id="edit-tags"><input type="text" placeholder="태그 입력" autocomplete="off" spellcheck="false"></div>
+        </div>
+        <label class="field"><span class="label">설명</span><input id="edit-description" type="text"></label>
+        <label class="check"><input id="edit-draft" type="checkbox"> 초안</label>
+        <label class="check"><input id="edit-pin" type="checkbox"> 첫 화면 맨 위에 고정</label>
+      </div>
+    </div>
+    <footer class="modal-foot">
+      <button class="btn danger" type="button" id="edit-delete">글 삭제</button>
+      <button class="btn ghost" type="button" id="edit-folder">폴더 열기</button>
+      <span class="spacer"></span>
+      <a class="btn ghost" id="edit-view" target="_blank" rel="noopener">보기 ↗</a>
+      <button class="btn" type="button" data-close>취소</button>
+      <button class="btn primary" type="button" id="edit-save">저장</button>
+    </footer>
+  </div>
+</div>
+
+<!-- ======================= 경로 붙여넣기 ======================= -->
+<div class="modal" id="paths-modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="paths-heading">
+    <header class="modal-head">
+      <h2 id="paths-heading">파일 경로 붙여넣기</h2>
+      <button class="icon-btn" type="button" data-close aria-label="닫기">✕</button>
+    </header>
+    <div class="modal-body">
+      <p class="muted small">탐색기에서 파일을 고르고 <b>Ctrl+Shift+C</b>(경로로 복사)를 누른 뒤 여기에 붙여 넣으세요. 한 줄에 하나씩, 폴더를 넣으면 그 안의 파일이 모두 들어갑니다.</p>
+      <textarea id="paths-text" rows="7" spellcheck="false" placeholder='"G:\내 드라이브\...\정리.md"'></textarea>
+    </div>
+    <footer class="modal-foot"><span class="spacer"></span><button class="btn" type="button" data-close>취소</button><button class="btn primary" type="button" id="paths-add">추가</button></footer>
+  </div>
+</div>
+
+<!-- ======================= 설정 ======================= -->
+<div class="modal" id="settings-modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="settings-heading">
+    <header class="modal-head">
+      <h2 id="settings-heading">설정</h2>
+      <button class="icon-btn" type="button" data-close aria-label="닫기">✕</button>
+    </header>
+    <div class="modal-body">
+      <div class="field">
+        <span class="label">원본 폴더</span>
+        <p class="muted small">브라우저로 끌어다 놓은 Markdown·HTML 파일의 원래 위치를 이 폴더들에서 찾아, 그 파일이 참조하는 이미지도 함께 올립니다. [파일 선택] 창도 여기서 시작합니다.</p>
+        <ul class="roots" id="roots"></ul>
+        <button class="btn small" type="button" id="add-root">폴더 추가</button>
+      </div>
+      <div class="field">
+        <span class="label">저장소</span>
+        <p class="muted small" id="repo-info"></p>
+        <button class="btn small ghost" type="button" id="open-repo">블로그 폴더 열기</button>
+      </div>
+    </div>
+    <footer class="modal-foot"><span class="spacer"></span><button class="btn primary" type="button" data-close>닫기</button></footer>
+  </div>
+</div>
+
+<!-- ======================= 게시 결과 ======================= -->
+<div class="modal" id="log-modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="log-heading">
+    <header class="modal-head">
+      <h2 id="log-heading">게시</h2>
+      <button class="icon-btn" type="button" data-close aria-label="닫기">✕</button>
+    </header>
+    <div class="modal-body">
+      <div id="log-summary"></div>
+      <details><summary>자세한 기록</summary><pre id="log-text"></pre></details>
+    </div>
+    <footer class="modal-foot"><span class="spacer"></span><button class="btn primary" type="button" data-close>닫기</button></footer>
+  </div>
+</div>
+
+<div class="busy" id="busy" hidden><div class="busy-card"><span class="spinner"></span><span id="busy-text">처리 중…</span></div></div>
+<div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if page_title %}{{ page_title }} · {% endif %}{{ site.title }}</title>
+<meta name="description" content="{{ page_description or site.description or site.bio }}">
+<meta property="og:site_name" content="{{ site.title }}">
+<meta property="og:title" content="{{ page_title or site.title }}">
+<meta property="og:description" content="{{ page_description or site.description or site.bio }}">
+<meta property="og:image" content="{{ site.url }}{{ site.avatar_url }}">
+<link rel="icon" type="image/png" href="{{ base }}/static/img/favicon.png?v={{ v }}">
+<link rel="apple-touch-icon" href="{{ base }}/static/img/apple-touch-icon.png?v={{ v }}">
+<link rel="alternate" type="application/rss+xml" title="{{ site.title }}" href="{{ base }}/feed.xml">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="{{ base }}/static/css/blog.css?v={{ v }}">
+{% if 'code' in flags %}
+<link rel="stylesheet" href="{{ base }}/static/css/pygments.css?v={{ v }}">
+{% endif %}
+{% if 'math' in flags %}
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true
+  },
+  options: {
+    skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+    ignoreHtmlClass: 'tex2jax_ignore',
+    processHtmlClass: 'tex2jax_process'
+  }
+};
+</script>
+<script defer src="{{ mathjax_url }}"></script>
+{% endif %}
+<script>window.BLOG = { base: "{{ base }}" };</script>
+<script defer src="{{ base }}/static/js/blog.js?v={{ v }}"></script>
+{% if 'pdf' in flags or 'html' in flags %}
+<script type="module" src="{{ base }}/static/js/embeds.js?v={{ v }}"></script>
+{% endif %}
+</head>
+<body class="tex2jax_ignore">
+<header class="mobile-bar">
+  <button class="icon-btn" id="menu-btn" type="button" aria-label="메뉴 열기" aria-controls="sidebar" aria-expanded="false">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </button>
+  <a class="mobile-home" href="{{ base }}/">
+    <img src="{{ site.avatar_url }}?v={{ v }}" alt="" width="30" height="30">
+    <span>{{ site.title }}</span>
+  </a>
+</header>
+<div class="scrim" id="scrim" hidden></div>
+
+<div class="layout">
+  <aside class="sidebar" id="sidebar" aria-label="블로그 메뉴">
+    <div class="sidebar-inner">
+      <a class="profile" href="{{ base }}/">
+        <img class="avatar" src="{{ site.avatar_url }}?v={{ v }}" alt="{{ site.author or site.title }} 프로필 사진" width="136" height="136">
+        <span class="site-title">{{ site.title }}</span>
+      </a>
+      {% if site.bio %}<p class="bio">{{ site.bio }}</p>{% endif %}
+
+      <div class="search" id="search">
+        <input id="search-input" class="search-input" type="search" placeholder="검색 · #태그 · 초성" autocomplete="off" spellcheck="false"
+               role="combobox" aria-label="글, 카테고리, 태그 검색" aria-controls="search-results" aria-expanded="false" aria-autocomplete="list">
+        <div id="search-results" class="search-results" role="listbox" hidden></div>
+      </div>
+
+      <nav class="side-block" aria-label="카테고리">
+        <div class="side-title"><a href="{{ base }}/categories/">카테고리</a></div>
+        <ul class="cat-tree">
+          <li><a class="cat-link{% if active_home %} active{% endif %}" href="{{ base }}/"><span class="cat-name">전체 글</span><span class="count">{{ total }}</span></a></li>
+          {% for node in nav_categories recursive %}
+          <li>
+            <a class="cat-link{% if active_category == node.path %} active{% elif active_category and active_category.startswith(node.path ~ '/') %} open{% endif %}" href="{{ node.url }}"><span class="cat-name">{{ node.name }}</span><span class="count">{{ node.count }}</span></a>
+            {% if node.children %}<ul>{{ loop(node.children) }}</ul>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </nav>
+
+      <nav class="side-block" aria-label="태그">
+        <div class="side-title"><a href="{{ base }}/tags/">태그</a></div>
+        {% if nav_tags %}
+        <div class="tag-cloud">
+          {% for tag in nav_tags %}<a class="tag{% if active_tag == tag.key %} active{% endif %}" href="{{ tag.url }}">#{{ tag.name }}<span class="count">{{ tag.count }}</span></a>{% endfor %}
+          {% if more_tags %}<a class="tag more" href="{{ base }}/tags/">+{{ more_tags }}개 더</a>{% endif %}
+        </div>
+        {% else %}
+        <p class="side-empty">아직 태그가 없습니다.</p>
+        {% endif %}
+      </nav>
+
+      <div class="side-footer">
+        {% if site.github %}<a href="{{ site.github }}" target="_blank" rel="noopener">GitHub</a>{% endif %}
+        <a href="{{ base }}/feed.xml">RSS</a>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main" id="main">
+{% block main %}{% endblock %}
+  </main>
+</div>
+
+<button class="to-top" id="to-top" type="button" aria-label="맨 위로">
+  <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</button>
+</body>
+</html>

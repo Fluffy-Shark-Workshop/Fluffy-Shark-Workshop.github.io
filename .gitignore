@@ -1,0 +1,14 @@
+# build output and local tools
+_site/
+.venv/
+.claude/
+__pycache__/
+*.pyc
+.writer/
+.writer-local.json
+
+# OS clutter
+Thumbs.db
+desktop.ini
+.DS_Store
+~$*

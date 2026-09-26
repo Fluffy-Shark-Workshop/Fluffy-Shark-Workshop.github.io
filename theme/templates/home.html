@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block main %}
+<section class="listing{% if 'math' in flags %} tex2jax_process{% endif %}">
+  <header class="list-header">
+    <h1>전체 글</h1>
+    <p class="list-count">{{ total }}개의 글{% if page_count > 1 %} · {{ page_number }}/{{ page_count }}쪽{% endif %}</p>
+  </header>
+  {% include "_post_list.html" %}
+  {% if page_count > 1 %}
+  <nav class="pager" aria-label="쪽 이동">
+    {% if page_number > 1 %}<a href="{{ page_url(page_number - 1) }}">← 최신 글</a>{% else %}<span></span>{% endif %}
+    <span class="pager-state">{{ page_number }} / {{ page_count }}</span>
+    {% if page_number < page_count %}<a href="{{ page_url(page_number + 1) }}">이전 글 →</a>{% else %}<span></span>{% endif %}
+  </nav>
+  {% endif %}
+</section>
+{% endblock %}

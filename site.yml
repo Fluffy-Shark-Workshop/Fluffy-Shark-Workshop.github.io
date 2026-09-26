@@ -1,0 +1,15 @@
+# 블로그 기본 설정. 고친 뒤 게시하면 반영됩니다.
+
+title: Fluffy Shark Workshop
+author: Fluffy Shark
+bio: 공부한 것들을 차곡차곡 기록합니다.
+description: 공부 기록과 필기, 보고서를 모아 두는 블로그
+url: https://fluffy-shark-workshop.github.io
+base_path: ""                      # 사용자 사이트(아이디.github.io)는 비워 둡니다
+avatar: static/img/avatar.jpg      # theme/static/img/avatar.jpg 를 바꾸면 프로필 사진이 바뀝니다
+github: https://github.com/Fluffy-Shark-Workshop
+
+default_category: 미분류           # 카테고리를 적지 않은 글이 들어갈 곳
+category_order: []                 # 사이드바 카테고리 순서. 예: [공부, 논문, 세미나] (나머지는 가나다순)
+sidebar_tag_limit: 0               # 사이드바에 보일 태그 수 (0 = 전부)
+posts_per_page: 30                 # 첫 화면 한 쪽에 보일 글 수

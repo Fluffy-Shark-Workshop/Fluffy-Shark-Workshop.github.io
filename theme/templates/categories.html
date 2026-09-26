@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block main %}
+<section class="listing">
+  <header class="list-header">
+    <h1>카테고리</h1>
+    <p class="list-count">{{ total }}개의 글</p>
+  </header>
+  {% if all_categories %}
+  <div class="cat-index">
+    {% for node in all_categories recursive %}
+    <section class="cat-section depth-{{ loop.depth }}">
+      <h2><a href="{{ node.url }}">{{ node.name }}</a><span class="count">{{ node.count }}</span></h2>
+      {% set direct = node.posts | selectattr('category', 'equalto', node.path) | list %}
+      {% if direct %}
+      <ul class="mini-list">
+        {% for p in direct %}<li><time datetime="{{ p.date_iso }}">{{ p.date_display }}</time><a href="{{ p.url }}">{{ p.title }}</a></li>{% endfor %}
+      </ul>
+      {% endif %}
+      {% if node.children %}{{ loop(node.children) }}{% endif %}
+    </section>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">아직 카테고리가 없습니다.</p>
+  {% endif %}
+</section>
+{% endblock %}

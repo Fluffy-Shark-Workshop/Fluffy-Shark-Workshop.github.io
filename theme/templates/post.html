@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block main %}
+<article class="post tex2jax_process">
+  <header class="post-header">
+    <nav class="breadcrumb" aria-label="카테고리 경로">
+      {% for node in post.category_trail %}<a href="{{ node.url }}">{{ node.name }}</a>{% if not loop.last %}<span class="sep" aria-hidden="true">›</span>{% endif %}{% endfor %}
+    </nav>
+    <h1 class="post-title">{% if post.draft %}<span class="badge-draft">초안</span>{% endif %}{{ post.title }}</h1>
+    <div class="post-meta">
+      <time datetime="{{ post.date_iso }}">{{ post.date_display }}</time>
+      {% for tag in post.tag_objs %}<a class="tag" href="{{ tag.url }}">#{{ tag.name }}</a>{% endfor %}
+      <button class="toc-btn" id="toc-btn" type="button" aria-controls="toc-panel" aria-expanded="false" hidden>
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>목차
+      </button>
+    </div>
+  </header>
+
+  <div class="post-body" id="post-body">
+{{ post.html | safe }}
+  </div>
+
+  {% if post.attachments %}
+  <section class="attachments" aria-label="첨부 파일">
+    <h2 class="attachments-title">첨부 파일</h2>
+    <ul>
+      {% for file in post.attachments %}
+      <li><a class="file-card" href="{{ file.url }}" download><span class="file-ext">{{ (file.name.rsplit('.', 1)[-1] if '.' in file.name else 'FILE')|upper|truncate(5, True, '') }}</span><span class="file-name">{{ file.name }}</span><span class="file-size">{{ file.size }}</span></a></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+</article>
+
+<nav class="post-nav tex2jax_process" aria-label="이전 글과 다음 글">
+  {% if post.prev %}<a class="prev" href="{{ post.prev.url }}"><span class="label">← 이전 글</span><span class="title">{{ post.prev.title }}</span></a>{% else %}<span></span>{% endif %}
+  {% if post.next %}<a class="next" href="{{ post.next.url }}"><span class="label">다음 글 →</span><span class="title">{{ post.next.title }}</span></a>{% endif %}
+</nav>
+
+<aside class="toc-panel tex2jax_process" id="toc-panel" aria-label="목차" hidden>
+  <div class="toc-head"><span>목차</span><button class="icon-btn" id="toc-close" type="button" aria-label="목차 닫기">✕</button></div>
+  <nav class="toc-list" id="toc-list"></nav>
+</aside>
+{% endblock %}

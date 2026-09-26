@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block main %}
+<section class="listing{% if 'math' in flags %} tex2jax_process{% endif %}">
+  <header class="list-header">
+    <p class="list-kind">{{ '카테고리' if kind == 'category' else '태그' }}</p>
+    {% if kind == 'category' %}
+    <h1 class="list-trail">{% for part in trail %}{% if not loop.last %}<a href="{{ part.url }}">{{ part.name }}</a><span class="sep" aria-hidden="true">›</span>{% else %}{{ part.name }}{% endif %}{% endfor %}</h1>
+    {% else %}
+    <h1>{{ heading }}</h1>
+    {% endif %}
+    <p class="list-count">{{ posts|length }}개의 글</p>
+    {% if kind == 'category' and node.children %}
+    <div class="chips">
+      {% for child in node.children %}<a class="chip" href="{{ child.url }}">{{ child.name }}<span class="count">{{ child.count }}</span></a>{% endfor %}
+    </div>
+    {% endif %}
+  </header>
+  {% include "_post_list.html" %}
+</section>
+{% endblock %}

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block main %}
+<section class="listing">
+  <header class="list-header">
+    <h1>태그</h1>
+    <p class="list-count">{{ tags_by_name|length }}개의 태그</p>
+  </header>
+  {% if tags_by_name %}
+  <div class="tag-index">
+    {% for tag in tags_by_name %}<a class="tag" href="{{ tag.url }}">#{{ tag.name }}<span class="count">{{ tag.count }}</span></a>{% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">아직 태그가 없습니다.</p>
+  {% endif %}
+</section>
+{% endblock %}
