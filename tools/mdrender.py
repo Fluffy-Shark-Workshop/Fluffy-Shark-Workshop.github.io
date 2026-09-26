@@ -8,6 +8,8 @@ MathJax receives exactly what was written.
 Attachments are embedded with image syntax:
     ![](note.png)      image           (consecutive lines = stacked with no gap)
     ![](lecture.pdf)   every PDF page  (rendered by pdf.js in the browser)
+    ![](note.pdf){.joined}  handwritten note: pages stacked with no gap, styled like note images
+                       (Samsung Notes exports get this automatically; {.pages} forces separate pages)
     ![](report.html)   full HTML page  (auto-height iframe)
     ![](notes.md)      another Markdown file rendered in place
     ![](data.zip)      download card for any other file type
@@ -377,6 +379,29 @@ def image_size(path: Path) -> tuple[int, int] | None:
     return None
 
 
+_PDF_TOOL_RE = re.compile(rb"/(?:Producer|Creator)\s*\(([^)]{0,200})\)|<(?:pdf:Producer|xmp:CreatorTool)>([^<]{0,200})<")
+
+
+def pdf_tool(path: Path) -> str:
+    """Producer/Creator of a PDF ('' when not stored as plain text near either end)."""
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as handle:
+            blobs = [handle.read(1 << 20)]
+            if size > 1 << 20:
+                handle.seek(max(1 << 20, size - (1 << 20)))
+                blobs.append(handle.read())
+    except OSError:
+        return ""
+    found = [(m.group(1) or m.group(2)).decode("latin-1", "replace") for blob in blobs for m in _PDF_TOOL_RE.finditer(blob)]
+    return " ".join(found)
+
+
+def is_split_note_pdf(path: Path) -> bool:
+    """Samsung Notes exports (made with PDFium) cut one long handwritten canvas into pages."""
+    return bool(re.search(r"pdfium|samsung", pdf_tool(path), re.I))
+
+
 # --------------------------------------------------------------------------
 # Rendering context
 # --------------------------------------------------------------------------
@@ -625,8 +650,25 @@ class Renderer:
 
         if kind == "pdf":
             ctx.flags.add("pdf")
+            # {.joined}: a handwritten note split into pages -> shown like stacked note images,
+            # {.pages}: a document with separate pages, nothing: Samsung Notes exports are joined.
+            classes = set(str(extra.get("class", "")).split())
+            if "joined" in classes:
+                joined = True
+            elif classes & {"pages", "gap"}:
+                joined = False
+            else:
+                joined = is_split_note_pdf(path)
+            if joined:
+                return (
+                    f'<div class="pdf-note" data-src="{html.escape(url)}" data-layout="joined" '
+                    f'role="img" aria-label="{html.escape(alt or name)}">'
+                    '<div class="pdf-pages"><div class="embed-loading">필기 불러오는 중…</div></div>'
+                    f'<noscript><p><a href="{html.escape(url)}">{html.escape(name)} 열기</a></p></noscript>'
+                    "</div>"
+                )
             return (
-                f'<div class="embed embed-pdf" data-src="{html.escape(url)}">'
+                f'<div class="embed embed-pdf" data-src="{html.escape(url)}" data-layout="pages">'
                 + _embed_bar("PDF", name, url, '<span class="embed-meta" data-pages></span>')
                 + '<div class="pdf-pages"><div class="embed-loading">PDF 불러오는 중…</div></div>'
                 + f'<noscript><p><a href="{html.escape(url)}">{html.escape(name)} 열기</a></p></noscript>'

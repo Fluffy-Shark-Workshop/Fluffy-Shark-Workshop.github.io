@@ -177,6 +177,7 @@ def register(path: Path, *, base: Path | None = None, name: str | None = None, s
         warn = "100MB가 넘는 파일은 GitHub에 올릴 수 없습니다. 파일을 줄이거나 나눠 주세요."
     elif size > WARN_FILE:
         warn = "50MB가 넘는 큰 파일입니다. 올릴 수는 있지만 페이지가 느려질 수 있습니다."
+    split_note = kind == "pdf" and mdrender.is_split_note_pdf(path)
     item = {
         "id": uuid.uuid4().hex[:12],
         "path": str(path),
@@ -192,6 +193,8 @@ def register(path: Path, *, base: Path | None = None, name: str | None = None, s
         "origin": origin or ("" if staged else str(path)),
         "warn": warn,
         "attach": True,
+        "split_note": split_note,
+        "joined": split_note,
     }
     ITEMS[item["id"]] = item
     return public_item(item)
@@ -211,6 +214,8 @@ def public_item(item: dict) -> dict:
         "origin": item["origin"],
         "warn": item["warn"],
         "attach": item.get("attach", True),
+        "split_note": item.get("split_note", False),
+        "joined": item.get("joined", False),
     }
 
 
@@ -368,20 +373,32 @@ def place_files(items: list[dict], folder: Path) -> list[dict]:
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
             taken[rel.casefold()] = dest
-        embeds.append({"rel": plan[0][1], "kind": item["kind"], "attach": item.get("attach", True)})
+        embeds.append({
+            "rel": plan[0][1],
+            "kind": item["kind"],
+            "attach": item.get("attach", True),
+            "joined": bool(item.get("joined")),
+        })
     return embeds
 
 
-def embed_markdown(embeds: list[dict], previous_kind: str | None = None) -> list[str]:
+def _stacks(embed: dict | None) -> bool:
+    """Images and handwritten-note PDFs stack into one continuous sheet."""
+    return bool(embed) and (embed["kind"] == "image" or (embed["kind"] == "pdf" and embed.get("joined")))
+
+
+def embed_markdown(embeds: list[dict]) -> list[str]:
     blocks: list[str] = []
-    last = previous_kind
+    previous = None
     for embed in embeds:
         line = f"![](<{embed['rel']}>)"
-        if blocks and embed["kind"] == "image" and last == "image" and embed.get("attach", True):
+        if embed["kind"] == "pdf":
+            line += "{.joined}" if embed.get("joined") else "{.pages}"
+        if blocks and _stacks(embed) and _stacks(previous) and embed.get("attach", True):
             blocks[-1] += "\n" + line
         else:
             blocks.append(line)
-        last = embed["kind"]
+        previous = embed
     return blocks
 
 
@@ -444,7 +461,11 @@ def save_post(data: dict) -> dict:
             raise ApiError("파일 목록이 오래되었습니다. 파일을 다시 넣어 주세요.")
         if item["size"] > MAX_FILE:
             raise ApiError(f"{item['name']}: 100MB가 넘어 올릴 수 없습니다.")
-        items.append({**item, "attach": bool(entry.get("attach", True))})
+        items.append({
+            **item,
+            "attach": bool(entry.get("attach", True)),
+            "joined": bool(entry.get("joined", item.get("joined", False))),
+        })
     intro = str(data.get("intro") or "").strip()
     if not items and not intro:
         raise ApiError("올릴 파일이나 본문을 넣어 주세요.")
@@ -533,7 +554,11 @@ def update_post(data: dict) -> dict:
         meta.pop("pinned", None)
         if "body" in data:
             body = str(data["body"])
-        new_items = [ITEMS[e["id"]] | {"attach": bool(e.get("attach", True))} for e in data.get("items") or [] if e.get("id") in ITEMS]
+        new_items = [
+            ITEMS[e["id"]] | {"attach": bool(e.get("attach", True)), "joined": bool(e.get("joined", ITEMS[e["id"]].get("joined", False)))}
+            for e in data.get("items") or []
+            if e.get("id") in ITEMS
+        ]
         if new_items:
             if single:
                 raise ApiError("파일 하나짜리 글에는 파일을 추가할 수 없습니다.")

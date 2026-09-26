@@ -239,15 +239,18 @@
 
   /* ---------------- file list ---------------- */
 
+  // images and handwritten-note PDFs stack into one continuous sheet
+  const stacks = (item) => Boolean(item) && (item.kind === 'image' || (item.kind === 'pdf' && item.joined));
+
   function ItemList(el, onChange) {
     let items = [];
     const render = () => {
       el.innerHTML = '';
       items.forEach((item, index) => {
-        if (index > 0 && item.kind === 'image' && items[index - 1].kind === 'image') {
+        if (index > 0 && stacks(item) && stacks(items[index - 1])) {
           const joint = document.createElement('li');
           joint.className = 'joint';
-          joint.innerHTML = `<button type="button" class="joint-btn${item.attach ? ' on' : ''}">${item.attach ? '🔗 위 이미지와 틈 없이 붙여서 표시' : '↕ 위 이미지와 간격을 두고 표시'}</button>`;
+          joint.innerHTML = `<button type="button" class="joint-btn${item.attach ? ' on' : ''}">${item.attach ? '🔗 위와 틈 없이 붙여서 표시' : '↕ 위와 간격을 두고 표시'}</button>`;
           joint.querySelector('button').addEventListener('click', () => { item.attach = !item.attach; render(); });
           el.appendChild(joint);
         }
@@ -263,10 +266,16 @@
           ? `<div class="item-warn">⚠ 이 문서가 참조하는 파일 ${item.missing.length}개를 찾지 못했습니다: ${esc(item.missing.slice(0, 3).join(', '))}${item.missing.length > 3 ? ' …' : ''}`
             + '<button type="button" class="btn small" data-act="resolve">원본 폴더 선택</button></div>'
           : '';
+        const pdfOption = item.kind === 'pdf'
+          ? `<label class="opt"><input type="checkbox" data-opt="join"${item.joined ? ' checked' : ''}> 필기처럼 쪽을 틈 없이 이어 붙이기`
+            + (item.split_note ? ' <span class="hint">삼성 노트 PDF라 자동으로 켰습니다</span>' : ' <span class="hint">끄면 문서처럼 쪽을 나눠 보여 줍니다</span>')
+            + '</label>'
+          : '';
         li.innerHTML = `<span class="kind ${esc(item.kind)}">${thumb}</span>`
           + '<div class="item-main">'
           + `<div class="item-name" title="${esc(item.name)}">${esc(item.name)}</div>`
           + `<div class="item-sub" title="${esc(sub.join(' · '))}">${esc(sub.join(' · '))}</div>`
+          + pdfOption
           + missing
           + (item.warn ? `<div class="item-warn">⚠ ${esc(item.warn)}</div>` : '')
           + '</div>'
@@ -291,6 +300,11 @@
               toast(fresh.missing.length ? `아직 ${fresh.missing.length}개를 찾지 못했습니다.` : '참조 파일을 모두 찾았습니다.', fresh.missing.length ? 'error' : undefined);
             } catch (error) { fail(error); }
           }
+          render();
+        });
+        li.addEventListener('change', (event) => {
+          if (!event.target.matches('[data-opt="join"]')) return;
+          item.joined = event.target.checked;
           render();
         });
         el.appendChild(li);
@@ -393,7 +407,7 @@
       description: $('#description').value.trim(),
       draft: $('#draft').checked,
       intro: $('#intro').value,
-      items: newList.get().map((item) => ({ id: item.id, attach: item.attach })),
+      items: newList.get().map((item) => ({ id: item.id, attach: item.attach, joined: item.joined })),
       publish: publishNow,
     };
     if (!payload.items.length && !payload.intro.trim()) { toast('올릴 파일이나 본문을 넣어 주세요.', 'error'); return; }
@@ -545,7 +559,7 @@
       draft: $('#edit-draft').checked,
       pin: $('#edit-pin').checked,
       body: $('#edit-body').value,
-      items: editList.get().map((item) => ({ id: item.id, attach: item.attach })),
+      items: editList.get().map((item) => ({ id: item.id, attach: item.attach, joined: item.joined })),
     };
     try {
       await withBusy('저장하는 중…', () => api('post/update', payload));

@@ -116,6 +116,8 @@ main { padding: 22px; }
 .item-name { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item-sub { color: var(--faint); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item-ok { color: var(--ok); font-size: 12.5px; }
+.opt { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; font-size: 13px; cursor: pointer; }
+.opt .hint { color: var(--faint); font-size: 12px; }
 .item-warn { margin-top: 4px; color: var(--warn); font-size: 12.5px; }
 .item-warn .btn { margin-left: 6px; }
 .item-btns { display: flex; gap: 2px; flex: 0 0 auto; }

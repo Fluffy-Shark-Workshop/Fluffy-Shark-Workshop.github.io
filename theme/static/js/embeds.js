@@ -31,15 +31,23 @@ function pump() {
   }
 }
 
+/*
+ * Two looks:
+ *  - document (.embed-pdf): framed viewer, separate pages on a grey background
+ *  - handwritten note (.pdf-note): pages stacked with no gap, like consecutive note images,
+ *    so strokes that cross a page boundary stay continuous. Click a page to zoom.
+ */
 class PdfEmbed {
   constructor(root) {
     this.root = root;
     this.url = root.dataset.src;
+    this.joined = root.dataset.layout === 'joined';
     this.pagesEl = root.querySelector('.pdf-pages');
     this.metaEl = root.querySelector('[data-pages]');
     this.slots = [];
     this.bySlot = new Map();
     this.actual = false;
+    this.lastWidth = 0;
   }
 
   async start() {
@@ -55,7 +63,7 @@ class PdfEmbed {
         iccUrl: `${PDFJS}/iccs/`,
       });
       task.onProgress = ({ loaded, total }) => {
-        if (loading && total) loading.textContent = `PDF 불러오는 중… ${Math.min(100, Math.round((loaded / total) * 100))}%`;
+        if (loading && total) loading.textContent = `${this.joined ? '필기' : 'PDF'} 불러오는 중… ${Math.min(100, Math.round((loaded / total) * 100))}%`;
       };
       this.doc = await task.promise;
       const first = await this.doc.getPage(1);
@@ -69,22 +77,35 @@ class PdfEmbed {
   build(firstPage) {
     const total = this.doc.numPages;
     if (this.metaEl) this.metaEl.textContent = `${total}쪽`;
-    this.addZoomButton();
+    if (!this.joined) this.addZoomButton();
     const size = firstPage.getViewport({ scale: 1 });
     this.pagesEl.textContent = '';
     for (let index = 1; index <= total; index += 1) {
       const el = document.createElement('div');
       el.className = 'pdf-page';
-      el.style.aspectRatio = `${size.width} / ${size.height}`;
-      const label = document.createElement('span');
-      label.className = 'pdf-num';
-      label.textContent = `${index} / ${total}`;
-      el.appendChild(label);
+      if (!this.joined) {
+        const label = document.createElement('span');
+        label.className = 'pdf-num';
+        label.textContent = `${index} / ${total}`;
+        el.appendChild(label);
+      }
       this.pagesEl.appendChild(el);
-      const slot = { el, index, page: index === 1 ? firstPage : null, width: size.width, near: false, busy: false, canvas: null, rendered: 0 };
+      const slot = {
+        el,
+        index,
+        page: index === 1 ? firstPage : null,
+        width: size.width,
+        ratio: size.height / size.width,
+        near: false,
+        busy: false,
+        canvas: null,
+        rendered: 0,
+      };
       this.slots.push(slot);
       this.bySlot.set(el, slot);
     }
+    if (this.joined) this.pagesEl.addEventListener('click', (event) => this.zoom(event));
+    this.layoutSlots();
     this.observe();
     this.readSizes();
   }
@@ -100,22 +121,46 @@ class PdfEmbed {
       event.preventDefault();
       this.actual = !this.actual;
       button.textContent = this.actual ? '폭에 맞추기' : '실제 크기';
-      this.slots.forEach((slot) => { slot.el.style.maxWidth = this.actual ? `${Math.round((slot.width * 96) / 72)}px` : ''; });
+      this.layoutSlots();
     });
     actions.prepend(button);
   }
 
+  /* Joined pages get whole-pixel heights so no hairline shows where two pages meet. */
+  layoutSlots() {
+    this.slots.forEach((slot) => {
+      slot.el.style.maxWidth = this.actual ? `${Math.round((slot.width * 96) / 72)}px` : '';
+    });
+    const widths = this.slots.map((slot) => slot.el.clientWidth);
+    this.slots.forEach((slot, i) => {
+      if (this.joined) {
+        slot.el.style.aspectRatio = '';
+        slot.el.style.height = `${Math.round(widths[i] * slot.ratio)}px`;
+      } else {
+        slot.el.style.height = '';
+        slot.el.style.aspectRatio = `${slot.width} / ${slot.width * slot.ratio}`;
+      }
+    });
+    this.lastWidth = this.pagesEl.clientWidth;
+    this.slots.forEach((slot) => { if (slot.near) this.request(slot); });
+  }
+
   async readSizes() {
     // Pages can differ in size (e.g. a landscape page inside a portrait deck).
+    let changed = false;
     for (const slot of this.slots) {
       if (!slot.page) {
         try { slot.page = await this.doc.getPage(slot.index); } catch (error) { continue; }
       }
       const size = slot.page.getViewport({ scale: 1 });
-      slot.width = size.width;
-      slot.el.style.aspectRatio = `${size.width} / ${size.height}`;
-      if (this.actual) slot.el.style.maxWidth = `${Math.round((size.width * 96) / 72)}px`;
+      const ratio = size.height / size.width;
+      if (size.width !== slot.width || Math.abs(ratio - slot.ratio) > 1e-6) {
+        slot.width = size.width;
+        slot.ratio = ratio;
+        changed = true;
+      }
     }
+    if (changed) this.layoutSlots();
   }
 
   observe() {
@@ -135,8 +180,9 @@ class PdfEmbed {
 
     let timer = null;
     new ResizeObserver(() => {
+      if (Math.abs(this.pagesEl.clientWidth - this.lastWidth) < 1) return;   // only width changes matter
       clearTimeout(timer);
-      timer = setTimeout(() => this.slots.forEach((slot) => { if (slot.near) this.request(slot); }), 180);
+      timer = setTimeout(() => this.layoutSlots(), 150);
     }).observe(this.pagesEl);
   }
 
@@ -155,11 +201,10 @@ class PdfEmbed {
       });
   }
 
-  async render(slot, cssWidth, ratio) {
-    if (!slot.near) return;
+  async draw(slot, pixelWidth) {
     if (!slot.page) slot.page = await this.doc.getPage(slot.index);
     const size = slot.page.getViewport({ scale: 1 });
-    let scale = (cssWidth * ratio) / size.width;
+    let scale = pixelWidth / size.width;
     const pixels = size.width * size.height * scale * scale;
     if (pixels > MAX_CANVAS_PIXELS) scale *= Math.sqrt(MAX_CANVAS_PIXELS / pixels);
     const viewport = slot.page.getViewport({ scale });
@@ -167,6 +212,12 @@ class PdfEmbed {
     canvas.width = Math.floor(viewport.width);
     canvas.height = Math.floor(viewport.height);
     await slot.page.render({ canvas, viewport }).promise;
+    return canvas;
+  }
+
+  async render(slot, cssWidth, ratio) {
+    if (!slot.near) return;
+    const canvas = await this.draw(slot, cssWidth * ratio);
     if (slot.canvas) slot.canvas.remove();
     slot.el.prepend(canvas);
     slot.canvas = canvas;
@@ -182,6 +233,26 @@ class PdfEmbed {
     slot.rendered = 0;
     if (slot.page) slot.page.cleanup();
   }
+
+  /* Same behaviour as note images: click a page to see it large. */
+  async zoom(event) {
+    const el = event.target.closest('.pdf-page');
+    const slot = el && this.bySlot.get(el);
+    if (!slot || !window.BLOG || typeof window.BLOG.zoom !== 'function' || this.zooming) return;
+    this.zooming = true;
+    document.body.style.cursor = 'progress';
+    try {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const canvas = await this.draw(slot, Math.min(4000, Math.max(2400, el.clientWidth * 2 * dpr)));
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (blob) window.BLOG.zoom(URL.createObjectURL(blob), `${slot.index}쪽`);
+    } catch (error) {
+      console.warn('zoom failed', error);
+    } finally {
+      this.zooming = false;
+      document.body.style.cursor = '';
+    }
+  }
 }
 
 const startWhenNear = (elements, start) => {
@@ -195,7 +266,7 @@ const startWhenNear = (elements, start) => {
   elements.forEach((el) => io.observe(el));
 };
 
-startWhenNear(document.querySelectorAll('.embed-pdf[data-src]'), (el) => new PdfEmbed(el).start());
+startWhenNear(document.querySelectorAll('.embed-pdf[data-src], .pdf-note[data-src]'), (el) => new PdfEmbed(el).start());
 
 /* ---------------- HTML ---------------- */
 

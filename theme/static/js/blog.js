@@ -188,15 +188,17 @@
     }
   }
 
-  /* ---------- image zoom ---------- */
-  const openLightbox = (img) => {
+  /* ---------- image zoom (also used by handwritten PDF pages) ---------- */
+  const openLightbox = (src, alt) => {
     const box = document.createElement('div');
     box.className = 'lightbox';
     const big = new Image();
-    big.src = img.currentSrc || img.src;
-    big.alt = img.alt || '';
-    const tall = img.naturalWidth && img.naturalHeight / img.naturalWidth > (window.innerHeight / window.innerWidth) * 1.4;
-    if (tall) box.classList.add('fit-width');
+    big.addEventListener('load', () => {
+      const tall = big.naturalHeight / big.naturalWidth > (window.innerHeight / window.innerWidth) * 1.4;
+      box.classList.toggle('fit-width', tall);
+    });
+    big.src = src;
+    big.alt = alt || '';
     const close = document.createElement('button');
     close.className = 'lightbox-close';
     close.type = 'button';
@@ -210,6 +212,7 @@
       box.remove();
       document.body.style.overflow = '';
       document.removeEventListener('keydown', onKey);
+      if (src.startsWith('blob:')) URL.revokeObjectURL(src);
     };
     const onKey = (event) => { if (event.key === 'Escape') shut(); };
     big.addEventListener('click', (event) => { event.stopPropagation(); box.classList.toggle('natural'); });
@@ -221,8 +224,9 @@
   document.addEventListener('click', (event) => {
     const img = event.target.closest && event.target.closest('.post-body img');
     if (!img || img.closest('a') || event.button !== 0) return;
-    openLightbox(img);
+    openLightbox(img.currentSrc || img.src, img.alt);
   });
+  window.BLOG = Object.assign(window.BLOG || {}, { zoom: openLightbox });
 
   /* ---------- back to top ---------- */
   const topButton = $('#to-top');

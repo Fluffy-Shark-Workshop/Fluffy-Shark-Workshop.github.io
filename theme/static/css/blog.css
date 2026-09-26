@@ -451,6 +451,13 @@ mjx-container[display="true"] {
 }
 .pdf-page:hover .pdf-num { opacity: 1; }
 
+/* a handwritten note PDF looks exactly like stacked note images: no frame, no gaps */
+.pdf-note { margin: 1.4em 0; }
+.media > .pdf-note { margin: 0; }
+.pdf-note .pdf-pages { display: block; padding: 0; background: none; }
+.pdf-note .pdf-page { width: 100%; margin: 0 auto; box-shadow: none; background: #fff; cursor: zoom-in; }
+.pdf-note .embed-loading { padding: 40px 16px; background: var(--soft); border-radius: 8px; }
+
 .html-frame { display: block; width: 100%; height: 70vh; border: 0; background: #fff; }
 
 .embed-video, .embed-audio { display: block; width: 100%; margin: 1.2em 0; }
