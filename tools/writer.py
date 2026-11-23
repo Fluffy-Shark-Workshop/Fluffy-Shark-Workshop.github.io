@@ -27,9 +27,9 @@ import urllib.parse
 import urllib.request
 import uuid
 import webbrowser
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-TOOLS = Path(__file__).resolve().parent
+TOOLS =Path(__file__).resolve().parent
 ROOT = TOOLS.parent
 sys.path.insert(0, str(TOOLS))
 
@@ -412,18 +412,74 @@ def rebuild() -> dict:
         return build.build(ROOT, include_drafts=True, quiet=True)
 
 
-def site_meta() -> dict:
-    config = build.load_config(ROOT)
-    posts = build.load_posts(ROOT, config, include_drafts=True)
-    base = config["base_path"]
-    categories: dict[str, int] = {}
-    tags: dict[str, list] = {}
-    rows = []
+def category_counts(posts: list) -> dict[str, int]:
+    counts: dict[str, int] = {}
     for post in posts:
         parts = post.category.split("/")
         for depth in range(1, len(parts) + 1):
             key = "/".join(parts[:depth])
-            categories[key] = categories.get(key, 0) + 1
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def ordered_categories(config: dict, counts: dict[str, int]) -> list[dict]:
+    """Every category in sidebar order: parents first, siblings as saved in site.yml."""
+    declared = build.declared_categories(config)
+    rank = {path: i for i, path in enumerate(declared)}
+    merged = {**{path: 0 for path in declared}, **counts}
+
+    def key(path: str) -> list:
+        parts = path.split("/")
+        return [(rank.get("/".join(parts[:d + 1]), len(rank)), build.natural_key(parts[d])) for d in range(len(parts))]
+
+    return [{"name": path, "count": merged[path]} for path in sorted(merged, key=key)]
+
+
+_CATEGORY_ORDER_RE = re.compile(r"^category_order:[^\n]*(?:\n(?:[ \t]+-|-[ \t])[^\n]*)*", re.M)
+
+
+def write_category_order(paths: list[str]) -> None:
+    """Update only the category_order entry so the comments in site.yml survive."""
+    target = ROOT / "site.yml"
+    raw = target.read_bytes().decode("utf-8")
+    eol = "\r\n" if "\r\n" in raw else "\n"
+    text = raw.replace("\r\n", "\n")
+    line = f"category_order: {_yaml_value(paths)}  # 사이드바 순서. 글쓰기 도구의 [카테고리] 탭에서 바꿉니다"
+    if _CATEGORY_ORDER_RE.search(text):
+        text = _CATEGORY_ORDER_RE.sub(lambda _: line, text, count=1)
+    else:
+        text = text.rstrip("\n") + "\n" + line + "\n"
+    target.write_bytes(text.replace("\n", eol).encode("utf-8"))
+
+
+def save_categories(data: dict) -> dict:
+    with LOCK:
+        config = build.load_config(ROOT)
+        used = category_counts(build.load_posts(ROOT, config, include_drafts=True))
+        order = build.declared_categories({"category_order": data.get("order") or []})
+        missing = [path for path in used if path not in order]
+        if missing:
+            raise ApiError("글이 있는 카테고리는 지울 수 없습니다: " + ", ".join(missing))
+        addresses: dict[tuple, str] = {}
+        for path in order:
+            address = tuple(build.url_segment(part) for part in path.split("/"))
+            if address in addresses:
+                raise ApiError(f"'{addresses[address]}'와 '{path}'는 주소가 같아 함께 쓸 수 없습니다.")
+            addresses[address] = path
+        write_category_order(order)
+        rebuild()
+    log("카테고리 순서 저장")
+    return {"order": order}
+
+
+def site_meta() -> dict:
+    config = build.load_config(ROOT)
+    posts = build.load_posts(ROOT, config, include_drafts=True)
+    base = config["base_path"]
+    categories = category_counts(posts)
+    tags: dict[str, list] = {}
+    rows = []
+    for post in posts:
         for tag in post.tags:
             tags.setdefault(tag.casefold(), [tag, 0])[1] += 1
         rows.append({
@@ -443,7 +499,7 @@ def site_meta() -> dict:
         "github": config.get("github", ""),
         "default_category": config["default_category"],
         "posts": rows,
-        "categories": [{"name": k, "count": v} for k, v in sorted(categories.items(), key=lambda kv: build.natural_key(kv[0]))],
+        "categories": ordered_categories(config, categories),
         "tags": [{"name": n, "count": c} for n, c in sorted(tags.values(), key=lambda t: (-t[1], t[0].casefold()))],
         "git": git_status(),
         "settings": load_settings(),
@@ -504,17 +560,288 @@ def save_post(data: dict) -> dict:
     }
 
 
+# --------------------------------------------------------------------------
+# attachments of an existing post
+# --------------------------------------------------------------------------
+
+_BODY_LINK_RE = re.compile(r'(!?)\[([^\]\n]*)\]\(\s*(<[^>\n]+>|[^)\n]+?)(\s+"[^"\n]*")?\s*\)(\{[^}\n]*\})?')
+_HTML_ATTR_RE = re.compile(r"""(\b(?:src|poster|href)\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
+
+
+def post_files(folder: Path) -> dict[str, Path]:
+    """Attachments of a post folder by relative path, in natural name order."""
+    found: dict[str, Path] = {}
+    for path in sorted(folder.rglob("*"), key=lambda p: build.natural_key(p.relative_to(folder).as_posix())):
+        rel = path.relative_to(folder)
+        if not path.is_file() or rel.as_posix() == "index.md":
+            continue
+        if any(part.startswith(".") for part in rel.parts) or path.name.lower() in build.SKIP_FILES or path.name.startswith("~$"):
+            continue
+        found[rel.as_posix()] = path
+    return found
+
+
+def _ref_key(dest: str, known) -> str:
+    """The attachment a link destination points to, or '' when it is not one."""
+    dest = dest.strip()
+    if dest.startswith("<") and dest.endswith(">"):
+        dest = dest[1:-1].strip()
+    if not _is_local_ref(dest):
+        return ""
+    for candidate in (dest, re.split(r"[?#]", dest, maxsplit=1)[0]):
+        clean = urllib.parse.unquote(candidate).replace("\\", "/")
+        clean = clean[2:] if clean.startswith("./") else clean
+        if clean in known:
+            return clean
+    return ""
+
+
+def _outside_fences(body: str, transform) -> str:
+    """Apply transform to the text between fenced code blocks."""
+    out: list[str] = []
+    position = 0
+    for match in _FENCED_RE.finditer(body):
+        out.append(transform(body[position:match.start()]))
+        out.append(match.group(0))
+        position = match.end()
+    out.append(transform(body[position:]))
+    return "".join(out)
+
+
+def embedded_files(body: str, known) -> dict[str, str]:
+    """Attachments shown in the body, in body order, with their {attributes}."""
+    found: dict[str, str] = {}
+
+    def scan(segment: str) -> str:
+        for match in _BODY_LINK_RE.finditer(segment):
+            key = _ref_key(match.group(3), known) if match.group(1) else ""
+            if key:
+                found.setdefault(key, match.group(5) or "")
+        for match in mdrender._OBSIDIAN_EMBED_RE.finditer(segment):
+            key = _ref_key(match.group(1), known)
+            if key:
+                found.setdefault(key, "")
+        return segment
+
+    _outside_fences(body, scan)
+    return found
+
+
+def reference_map(folder: Path, files: dict[str, Path]) -> dict[str, list[str]]:
+    """{attachment: [Markdown/HTML attachments that reference it]}."""
+    root = folder.resolve()
+    used: dict[str, list[str]] = {}
+    for rel, path in files.items():
+        kind = mdrender.kind_of(path.name)
+        if kind not in ("md", "html"):
+            continue
+        refs, _ = find_refs(path, kind, path.parent)
+        for _, target in refs:
+            try:
+                used.setdefault(Path(target).relative_to(root).as_posix(), []).append(rel)
+            except ValueError:
+                continue
+    return used
+
+
+def attachment_rows(folder: Path, body: str) -> list[dict]:
+    files = post_files(folder)
+    embedded = embedded_files(body, files)
+    used = reference_map(folder, files)
+    names = [name for name in embedded if name in files] + [name for name in files if name not in embedded]
+    rows = []
+    for name in names:
+        path = files[name]
+        kind = mdrender.kind_of(path.name)
+        attrs = embedded.get(name, "")
+        joined = False
+        if kind == "pdf":
+            joined = ".joined" in attrs or (".pages" not in attrs and mdrender.is_split_note_pdf(path))
+        rows.append({
+            "name": name,
+            "kind": kind,
+            "size_text": mdrender.human_size(path.stat().st_size),
+            "embedded": name in embedded,
+            "joined": joined,
+            "used_by": used.get(name, []),
+        })
+    return rows
+
+
+def _clean_file_name(name: str) -> str:
+    name = unicodedata.normalize("NFC", str(name)).strip()
+    if not name or name in (".", "..") or name.endswith(".") or re.search(r'[\\/:*?"<>|\x00-\x1f]', name):
+        raise ApiError(f"파일 이름으로 쓸 수 없습니다: {name}")
+    if name.startswith(("~$", ".")) or name.casefold() == "index.md" or Path(name).stem.casefold() in build.WINDOWS_RESERVED:
+        raise ApiError(f"파일 이름으로 쓸 수 없습니다: {name}")
+    return name
+
+
+def plan_file_ops(folder: Path, ops: dict) -> dict:
+    """Check every requested attachment change before anything on disk is touched."""
+    files = post_files(folder)
+    removed: set[str] = set()
+    for name in ops.get("remove") or []:
+        if name not in files:
+            raise ApiError(f"첨부 파일을 찾을 수 없습니다: {name}")
+        removed.add(name)
+
+    renames: dict[str, str] = {}
+    for entry in ops.get("rename") or []:
+        old = str(entry.get("from") or "")
+        if old not in files or old in removed:
+            raise ApiError(f"첨부 파일을 찾을 수 없습니다: {old}")
+        new_name = _clean_file_name(entry.get("to"))
+        if Path(new_name).suffix.casefold() != Path(old).suffix.casefold():
+            raise ApiError(f"{old}: 확장자는 바꿀 수 없습니다. 다른 형식은 [교체]를 쓰세요.")
+        new = (PurePosixPath(old).parent / new_name).as_posix()
+        if new != old:
+            renames[old] = new
+
+    replaces: list[tuple[str, dict]] = []
+    for entry in ops.get("replace") or []:
+        old = str(entry.get("name") or "")
+        item = ITEMS.get(str(entry.get("id")))
+        if old not in files or old in removed:
+            raise ApiError(f"첨부 파일을 찾을 수 없습니다: {old}")
+        if not item:
+            raise ApiError("파일 목록이 오래되었습니다. 교체할 파일을 다시 골라 주세요.")
+        if item["size"] > MAX_FILE:
+            raise ApiError(f"{item['name']}: 100MB가 넘어 올릴 수 없습니다.")
+        current = PurePosixPath(renames.get(old, old))
+        suffix = Path(item["name"]).suffix
+        if suffix.casefold() != current.suffix.casefold():
+            renames[old] = current.with_suffix(suffix).as_posix()
+        replaces.append((old, item))
+
+    keep = {name.casefold() for name in files if name not in removed and name not in renames}
+    finals: set[str] = set()
+    for new in renames.values():
+        if new.casefold() in keep or new.casefold() in finals:
+            raise ApiError(f"같은 이름의 첨부 파일이 이미 있습니다: {new}")
+        finals.add(new.casefold())
+
+    used = reference_map(folder, files)
+    for name in removed | set(renames):
+        users = [user for user in used.get(name, []) if user not in removed]
+        if users:
+            raise ApiError(f"{name}: {users[0]} 문서가 이 파일을 참조하고 있어 지우거나 이름을 바꿀 수 없습니다.")
+
+    root = folder.resolve()
+    copies: list[tuple[Path, Path]] = []
+    for old, item in replaces:
+        target = folder / renames.get(old, old)
+        for rel, source in item["refs"]:
+            dest = (target.parent / rel).resolve()
+            if root not in dest.parents:
+                raise ApiError(f"{item['name']}: 글 폴더 밖의 파일을 참조해 교체할 수 없습니다 ({rel}).")
+            if not dest.exists():
+                copies.append((Path(source), dest))
+            elif not dest.samefile(source) and _file_digest(dest) != _file_digest(Path(source)):
+                raise ApiError(f"{item['name']}: 참조 파일 {rel}이 기존 파일과 달라 교체할 수 없습니다.")
+    return {"known": set(files), "removed": removed, "renames": renames, "replaces": replaces, "copies": copies}
+
+
+def apply_file_ops(folder: Path, plan: dict) -> None:
+    holding: list[tuple[Path, Path]] = []
+    for old, new in plan["renames"].items():
+        parked = (folder / old).with_name(f".moving-{uuid.uuid4().hex[:10]}")
+        (folder / old).rename(parked)
+        holding.append((parked, folder / new))
+    for parked, final in holding:
+        final.parent.mkdir(parents=True, exist_ok=True)
+        parked.rename(final)
+    for old, item in plan["replaces"]:
+        target = folder / plan["renames"].get(old, old)
+        if not target.samefile(item["path"]):
+            shutil.copy2(item["path"], target)
+    for source, dest in plan["copies"]:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, dest)
+    for name in plan["removed"]:
+        (folder / name).unlink()
+    for path in sorted((p for p in folder.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+        if not any(path.iterdir()):
+            path.rmdir()
+
+
+def _pdf_attrs(attrs: str, joined: bool) -> str:
+    parts = [part for part in attrs.strip("{}").split() if part not in (".joined", ".pages")]
+    return "{" + " ".join([".joined" if joined else ".pages"] + parts) + "}"
+
+
+def rewrite_body(body: str, known: set, renames: dict, removed: set, order: list, pdf_modes: dict) -> str:
+    """Keep the Markdown in step with attachment changes. Code blocks stay untouched."""
+    rank = {name: index for index, name in enumerate(order)}
+
+    def movable(match: re.Match) -> bool:
+        return bool(match.group(1)) and _ref_key(match.group(3), known) in rank
+
+    if rank:
+        tokens: list[re.Match] = []
+
+        def collect(segment: str) -> str:
+            tokens.extend(match for match in _BODY_LINK_RE.finditer(segment) if movable(match))
+            return segment
+
+        _outside_fences(body, collect)
+        placed = iter(sorted(tokens, key=lambda m: rank[_ref_key(m.group(3), known)]))
+        body = _outside_fences(body, lambda seg: _BODY_LINK_RE.sub(lambda m: next(placed).group(0) if movable(m) else m.group(0), seg))
+
+    def link(match: re.Match) -> str:
+        bang, alt, dest, title, attrs = match.groups()
+        key = _ref_key(dest, known)
+        if not key:
+            return match.group(0)
+        if key in removed:
+            return "" if bang else alt
+        attrs = attrs or ""
+        if bang and key in pdf_modes:
+            attrs = _pdf_attrs(attrs, bool(pdf_modes[key]))
+        target = f"<{renames[key]}>" if key in renames else dest
+        return f"{bang}[{alt}]({target}{title or ''}){attrs}"
+
+    def obsidian(match: re.Match) -> str:
+        key = _ref_key(match.group(1), known)
+        if key in removed:
+            return ""
+        if key in renames:
+            return f"![[{renames[key]}" + (f"|{match.group(2)}" if match.group(2) is not None else "") + "]]"
+        return match.group(0)
+
+    def html_attr(match: re.Match) -> str:
+        key = _ref_key(match.group(3), known)
+        return f"{match.group(1)}{match.group(2)}{renames[key]}{match.group(2)}" if key in renames else match.group(0)
+
+    def transform(segment: str) -> str:
+        segment = _BODY_LINK_RE.sub(link, segment)
+        segment = mdrender._OBSIDIAN_EMBED_RE.sub(obsidian, segment)
+        segment = _HTML_ATTR_RE.sub(html_attr, segment)
+        return re.sub(r"\n{3,}", "\n\n", segment) if removed else segment
+
+    return _outside_fences(body, transform)
+
+
+def target_slug(slug: str, wanted) -> str:
+    wanted = str(wanted or "").strip()
+    if not wanted or wanted == slug:
+        return slug
+    clean = safe_name(wanted, 120)
+    if not clean or clean.startswith(("_", ".")) or clean.casefold() in build.WINDOWS_RESERVED:
+        raise ApiError("글 주소로 쓸 수 없는 이름입니다.")
+    if clean != slug and clean.casefold() != slug.casefold():
+        if (POSTS / clean).exists() or any((POSTS / f"{clean}{ext}").exists() for ext in mdrender.MD_EXT):
+            raise ApiError(f"같은 주소의 글이 이미 있습니다: {clean}")
+    return clean
+
+
 def read_post(slug: str) -> dict:
     folder, source, single = post_source(slug)
     meta, body = read_meta(source)
     if not source.exists():
         body = build.auto_body(folder)
     config = build.load_config(ROOT)
-    files = []
-    if not single:
-        for path in sorted(folder.rglob("*"), key=lambda p: build.natural_key(p.relative_to(folder).as_posix())):
-            if path.is_file() and path.name != "index.md":
-                files.append({"name": path.relative_to(folder).as_posix(), "size_text": mdrender.human_size(path.stat().st_size)})
+    files = [] if single else attachment_rows(folder, body)
     date = build.parse_date(meta.get("date"), None)
     return {
         "slug": slug,
@@ -554,21 +881,50 @@ def update_post(data: dict) -> dict:
         meta.pop("pinned", None)
         if "body" in data:
             body = str(data["body"])
-        new_items = [
-            ITEMS[e["id"]] | {"attach": bool(e.get("attach", True)), "joined": bool(e.get("joined", ITEMS[e["id"]].get("joined", False)))}
-            for e in data.get("items") or []
-            if e.get("id") in ITEMS
-        ]
-        if new_items:
-            if single:
-                raise ApiError("파일 하나짜리 글에는 파일을 추가할 수 없습니다.")
-            embeds = place_files(new_items, folder)
-            blocks = embed_markdown(embeds)
-            body = body.rstrip("\n") + "\n\n" + "\n\n".join(blocks)
-        write_post_file(source, meta, body)
-        rebuild()
-    log(f"수정: {slug}")
-    return read_post(slug)
+        new_items = []
+        for entry in data.get("items") or []:
+            item = ITEMS.get(str(entry.get("id")))
+            if not item:
+                raise ApiError("파일 목록이 오래되었습니다. 파일을 다시 넣어 주세요.")
+            if item["size"] > MAX_FILE:
+                raise ApiError(f"{item['name']}: 100MB가 넘어 올릴 수 없습니다.")
+            new_items.append(item | {"attach": bool(entry.get("attach", True)), "joined": bool(entry.get("joined", item.get("joined", False)))})
+        ops = data.get("files") or {}
+        if single and (new_items or any(ops.get(key) for key in ("remove", "rename", "replace"))):
+            raise ApiError("파일 하나짜리 글에는 첨부 파일을 둘 수 없습니다.")
+        final_slug = target_slug(slug, data.get("new_slug"))
+        plan = None if single else plan_file_ops(folder, ops)
+        if plan:
+            body = rewrite_body(body, plan["known"], plan["renames"], plan["removed"], ops.get("order") or [], ops.get("pdf") or {})
+
+        # attachment changes are all or nothing: restore the folder if any step fails
+        changes_files = bool(new_items or (plan and (plan["removed"] or plan["renames"] or plan["replaces"])))
+        backup = STATE_DIR / "backup" / uuid.uuid4().hex[:12] if changes_files else None
+        if backup:
+            shutil.copytree(folder, backup)
+        try:
+            if plan:
+                apply_file_ops(folder, plan)
+            if new_items:
+                blocks = embed_markdown(place_files(new_items, folder))
+                body = body.rstrip("\n") + "\n\n" + "\n\n".join(blocks)
+            write_post_file(source, meta, body)
+            if final_slug != slug:
+                if single:
+                    source.rename(POSTS / f"{final_slug}{source.suffix}")
+                else:
+                    folder.rename(POSTS / final_slug)
+        except Exception:
+            if backup:
+                shutil.rmtree(folder, ignore_errors=True)
+                shutil.copytree(backup, folder)
+            raise
+        finally:
+            if backup:
+                shutil.rmtree(backup, ignore_errors=True)
+        result = rebuild()
+    log(f"수정: {final_slug}")
+    return {**read_post(final_slug), "warnings": [w for w in result["warnings"] if w.startswith(f"{final_slug}:")]}
 
 
 def delete_post(slug: str) -> dict:
@@ -611,7 +967,18 @@ def rename_everywhere(kind: str, old: str, new: str) -> dict:
                 meta["category"] = new + category[len(old):]
             write_post_file(source, meta, body)
             changed += 1
-        if changed:
+        order_changed = False
+        if kind == "category":      # keep the saved sidebar order pointing at the new name
+            declared = build.declared_categories(build.load_config(ROOT))
+            renamed: list[str] = []
+            for path in declared:
+                moved = new + path[len(old):] if path == old or path.startswith(old + "/") else path
+                if moved not in renamed:
+                    renamed.append(moved)
+            if renamed != declared:
+                write_category_order(renamed)
+                order_changed = True
+        if changed or order_changed:
             rebuild()
     log(f"이름 변경({kind}): {old} → {new}, {changed}개 글")
     return {"changed": changed}
@@ -873,6 +1240,8 @@ class Handler(build.SiteHandler):
             return delete_post(str(data.get("slug") or ""))
         if name == "rename":
             return rename_everywhere("tag" if data.get("kind") == "tag" else "category", str(data.get("old") or ""), str(data.get("new") or ""))
+        if name == "categories":
+            return save_categories(data)
         if name == "publish":
             return publish(str(data.get("message") or ""))
         if name == "rebuild":

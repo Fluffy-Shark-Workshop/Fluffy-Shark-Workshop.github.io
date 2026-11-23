@@ -20,6 +20,7 @@
   <nav class="tabs" role="tablist">
     <button class="tab active" type="button" role="tab" data-tab="new" aria-selected="true">새 글</button>
     <button class="tab" type="button" role="tab" data-tab="manage" aria-selected="false">글 관리</button>
+    <button class="tab" type="button" role="tab" data-tab="categories" aria-selected="false">카테고리</button>
   </nav>
   <div class="top-actions">
     <a class="btn ghost" href="{{BASE}}/" target="_blank" rel="noopener">미리보기 ↗</a>
@@ -100,22 +101,34 @@
         </div>
       </div>
       <aside class="rename-box">
-        <h3>이름 한꺼번에 바꾸기</h3>
-        <p class="muted small">모든 글의 태그나 카테고리 이름을 한 번에 바꿉니다. 이미 있는 이름으로 바꾸면 둘이 합쳐집니다.</p>
+        <h3>태그 이름 한꺼번에 바꾸기</h3>
+        <p class="muted small">모든 글의 태그 이름을 한 번에 바꿉니다. 이미 있는 이름으로 바꾸면 둘이 합쳐집니다.</p>
         <div class="field">
           <span class="label">태그</span>
           <div class="suggest-wrap"><input id="rename-tag-from" type="text" placeholder="기존 태그" autocomplete="off"></div>
           <div class="suggest-wrap"><input id="rename-tag-to" type="text" placeholder="새 이름" autocomplete="off"></div>
           <button class="btn" type="button" id="rename-tag">태그 이름 바꾸기</button>
         </div>
-        <div class="field">
-          <span class="label">카테고리 <em>하위 카테고리도 함께 옮겨집니다</em></span>
-          <div class="suggest-wrap"><input id="rename-cat-from" type="text" placeholder="기존 카테고리" autocomplete="off"></div>
-          <div class="suggest-wrap"><input id="rename-cat-to" type="text" placeholder="새 이름 (예: 공부/SLAM)" autocomplete="off"></div>
-          <button class="btn" type="button" id="rename-cat">카테고리 이름 바꾸기</button>
-        </div>
-        <p class="muted small">사이드바의 카테고리 순서는 <code>site.yml</code>의 <code>category_order</code>로 정합니다.</p>
+        <p class="muted small">카테고리 순서와 이름은 [카테고리] 탭에서 바꿉니다.</p>
       </aside>
+    </div>
+  </section>
+
+  <!-- ======================= 카테고리 ======================= -->
+  <section class="panel" id="tab-categories" hidden>
+    <div class="cats-card">
+      <div class="cats-head">
+        <div>
+          <h3>카테고리 순서</h3>
+          <p class="muted small">줄을 끌어서 놓거나 화살표로 같은 단계 안의 순서를 바꿉니다. 저장한 뒤 [게시하기]를 누르면 블로그에 반영됩니다.</p>
+        </div>
+        <div class="cats-actions">
+          <button class="btn" type="button" id="cats-add">카테고리 추가</button>
+          <button class="btn ghost" type="button" id="cats-reset" disabled>되돌리기</button>
+          <button class="btn primary" type="button" id="cats-save" disabled>순서 저장</button>
+        </div>
+      </div>
+      <ul class="cat-edit" id="cat-tree"></ul>
     </div>
   </section>
 </main>
@@ -130,9 +143,14 @@
     <div class="modal-body edit-grid">
       <div class="edit-main">
         <label class="field">
-          <span class="label">본문 <em>index.md · 첨부 파일은 ![](파일이름) 으로 넣습니다</em></span>
+          <span class="label">본문 <em>Markdown과 수식을 쓸 수 있고, 첨부 파일은 ![](파일이름) 으로 넣습니다</em></span>
           <textarea id="edit-body" rows="16" spellcheck="false"></textarea>
         </label>
+        <div class="field" id="edit-files-field">
+          <span class="label">첨부 파일 <span id="edit-files-count"></span> <em>변경 내용은 [저장]을 눌러야 적용됩니다</em></span>
+          <ol class="items attach-list" id="edit-files"></ol>
+          <input type="file" id="edit-replace-input" hidden>
+        </div>
         <div class="field">
           <span class="label">파일 추가 <em>본문 끝에 붙습니다</em></span>
           <div class="dropzone compact" id="edit-drop">
@@ -140,10 +158,10 @@
           </div>
           <ol class="items" id="edit-items"></ol>
         </div>
-        <details class="files-box"><summary>이 글의 파일 <span id="edit-files-count"></span></summary><ul id="edit-files"></ul></details>
       </div>
       <div class="edit-side">
         <label class="field"><span class="label">제목</span><input id="edit-title" type="text"></label>
+        <label class="field"><span class="label">글 주소 <em>바꾸면 예전 링크는 열리지 않습니다</em></span><input id="edit-slug" type="text" spellcheck="false"></label>
         <label class="field"><span class="label">날짜</span><input id="edit-date" type="datetime-local"></label>
         <div class="field">
           <span class="label">카테고리</span>
@@ -164,8 +182,24 @@
       <span class="spacer"></span>
       <a class="btn ghost" id="edit-view" target="_blank" rel="noopener">보기 ↗</a>
       <button class="btn" type="button" data-close>취소</button>
-      <button class="btn primary" type="button" id="edit-save">저장</button>
+      <button class="btn" type="button" id="edit-save">저장</button>
+      <button class="btn primary" type="button" id="edit-save-publish">저장하고 게시하기</button>
     </footer>
+  </div>
+</div>
+
+<!-- ======================= 이름 입력 ======================= -->
+<div class="modal" id="name-modal" hidden>
+  <div class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="name-heading">
+    <header class="modal-head">
+      <h2 id="name-heading"></h2>
+      <button class="icon-btn" type="button" data-close aria-label="닫기">✕</button>
+    </header>
+    <div class="modal-body">
+      <p class="muted small" id="name-hint"></p>
+      <input id="name-input" type="text" autocomplete="off" spellcheck="false">
+    </div>
+    <footer class="modal-foot"><span class="spacer"></span><button class="btn" type="button" data-close>취소</button><button class="btn primary" type="button" id="name-ok">확인</button></footer>
   </div>
 </div>
 

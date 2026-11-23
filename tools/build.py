@@ -113,6 +113,18 @@ def normalize_category(value) -> str:
     return "/".join(p for p in parts if p)
 
 
+def declared_categories(config: dict) -> list[str]:
+    """Categories listed in site.yml, in display order, each preceded by its parents."""
+    paths: list[str] = []
+    for entry in config.get("category_order") or []:
+        parts = normalize_category(entry).split("/")
+        for depth in range(1, len(parts) + 1):
+            path = "/".join(parts[:depth])
+            if path and path not in paths:
+                paths.append(path)
+    return paths
+
+
 def parse_date(value, fallback: dt.datetime | None) -> dt.datetime | None:
     moment = None
     if isinstance(value, dt.datetime):
@@ -394,10 +406,13 @@ def build(root: Path = ROOT, out: Path | None = None, include_drafts: bool = Fal
             tags[key].posts.append(post)
             post.tag_objs.append(tags[key])
 
-    order = {name: i for i, name in enumerate(config.get("category_order") or [])}
+    declared = declared_categories(config)
+    for path in declared:       # listed categories appear even before they have a post
+        category_node(path)
+    order = {path: i for i, path in enumerate(declared)}
 
     def sort_nodes(nodes: list[Category]) -> list[Category]:
-        nodes.sort(key=lambda n: (order.get(n.path, order.get(n.name, len(order))), natural_key(n.name)))
+        nodes.sort(key=lambda n: (order.get(n.path, len(order)), natural_key(n.name)))
         for n in nodes:
             sort_nodes(n.children)
         return nodes

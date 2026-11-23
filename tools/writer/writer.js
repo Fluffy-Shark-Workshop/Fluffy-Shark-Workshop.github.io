@@ -328,11 +328,38 @@
     });
     $('#tab-new').hidden = name !== 'new';
     $('#tab-manage').hidden = name !== 'manage';
+    $('#tab-categories').hidden = name !== 'categories';
   };
   $$('.tab').forEach((tab) => tab.addEventListener('click', () => switchTab(tab.dataset.tab)));
 
+  let nameResolve = null;
+  const finishName = (value) => {
+    const resolve = nameResolve;
+    nameResolve = null;
+    $('#name-modal').hidden = true;
+    if (resolve) resolve(value);
+  };
   const openModal = (selector) => { $(selector).hidden = false; };
-  const closeModal = (modal) => { modal.hidden = true; };
+  const closeModal = (modal) => {
+    if (modal.id === 'name-modal') { finishName(null); return; }
+    if (modal.id === 'edit-modal' && isEditDirty() && !window.confirm('저장하지 않은 수정 내용을 버릴까요?')) return;
+    modal.hidden = true;
+  };
+  function askName({ title, hint = '', value = '', selectEnd }) {
+    const input = $('#name-input');
+    $('#name-heading').textContent = title;
+    $('#name-hint').textContent = hint;
+    input.value = value;
+    openModal('#name-modal');
+    setTimeout(() => { input.focus(); input.setSelectionRange(0, selectEnd ?? value.length); }, 30);
+    return new Promise((resolve) => { nameResolve = resolve; });
+  }
+  $('#name-ok').addEventListener('click', () => finishName($('#name-input').value.trim()));
+  $('#name-input').addEventListener('keydown', (event) => {
+    if (event.isComposing || event.keyCode === 229 || event.key !== 'Enter') return;
+    event.preventDefault();
+    finishName($('#name-input').value.trim());
+  });
   $$('.modal').forEach((modal) => {
     modal.addEventListener('click', (event) => {
       if (event.target.closest('[data-close]')) closeModal(modal);
@@ -362,6 +389,7 @@
     META = await api('meta');
     renderPosts();
     updatePending();
+    if (!catDirty) loadCats();
   }
 
   setInterval(async () => {
@@ -516,41 +544,37 @@
   });
 
   let editing = null;
+  let fileState = [];
+  let editOrder = [];
+  let editSnapshot = '';
+  let replaceTarget = null;
   const editTags = Chips($('#edit-tags'), () => META.tags);
   Suggest($('#edit-category'), () => META.categories, { onPick: (name) => { $('#edit-category').value = name; } });
   const editList = ItemList($('#edit-items'));
 
-  async function openEdit(slug) {
-    try {
-      const post = await withBusy('글을 불러오는 중…', () => api('post?slug=' + encodeURIComponent(slug)));
-      editing = post;
-      $('#edit-heading').textContent = `글 수정 · ${post.slug}`;
-      $('#edit-title').value = post.title;
-      $('#edit-date').value = post.date;
-      $('#edit-category').value = post.category;
-      editTags.set(post.tags);
-      $('#edit-description').value = post.description;
-      $('#edit-draft').checked = post.draft;
-      $('#edit-pin').checked = post.pin;
-      $('#edit-body').value = post.body;
-      $('#edit-view').href = post.url;
-      $('#edit-files-count').textContent = `(${post.files.length}개)`;
-      $('#edit-files').innerHTML = post.files.map((f) => `<li>${esc(f.name)} <span class="muted">${esc(f.size_text)}</span></li>`).join('');
-      $('#edit-drop').hidden = post.single;
-      editList.clear();
-      openModal('#edit-modal');
-    } catch (error) { fail(error); }
+  const baseName = (name) => name.split('/').pop();
+  const extOf = (name) => { const at = name.lastIndexOf('.'); return at > 0 ? name.slice(at).toLowerCase() : ''; };
+  const fileUrl = (file) => editing.url + file.name.split('/').map(encodeURIComponent).join('/');
+  const blockers = (file) => file.used_by.filter((user) => !fileState.some((f) => f.name === user && f.removed));
+
+  function fileOps() {
+    const live = fileState.filter((f) => !f.removed);
+    const order = live.filter((f) => f.embedded).map((f) => f.name);
+    const before = editOrder.filter((name) => order.includes(name));
+    const after = order.filter((name) => editOrder.includes(name));
+    return {
+      remove: fileState.filter((f) => f.removed).map((f) => f.name),
+      rename: live.filter((f) => f.renameTo).map((f) => ({ from: f.name, to: f.renameTo })),
+      replace: live.filter((f) => f.replaceItem).map((f) => ({ name: f.name, id: f.replaceItem.id })),
+      order: before.join('\n') === after.join('\n') ? [] : after,
+      pdf: Object.fromEntries(live.filter((f) => f.kind === 'pdf' && f.embedded && f.joinedNow !== f.joined).map((f) => [f.name, f.joinedNow])),
+    };
   }
 
-  $('#edit-pick').addEventListener('click', async () => {
-    try { editList.add((await api('pick', { mode: 'files' })).items); } catch (error) { fail(error); }
-  });
-
-  $('#edit-save').addEventListener('click', async () => {
-    if (!editing) return;
-    editTags.flush();
-    const payload = {
+  function editPayload() {
+    return {
       slug: editing.slug,
+      new_slug: $('#edit-slug').value.trim(),
       title: $('#edit-title').value.trim(),
       date: $('#edit-date').value,
       category: $('#edit-category').value.trim(),
@@ -560,20 +584,184 @@
       pin: $('#edit-pin').checked,
       body: $('#edit-body').value,
       items: editList.get().map((item) => ({ id: item.id, attach: item.attach, joined: item.joined })),
+      files: fileOps(),
     };
+  }
+
+  function isEditDirty() {
+    return Boolean(editing) && !$('#edit-modal').hidden && JSON.stringify(editPayload()) !== editSnapshot;
+  }
+
+  function renderFiles() {
+    const live = fileState.filter((f) => !f.removed);
+    const pool = live.filter((f) => f.embedded);
+    $('#edit-files-count').textContent = `(${live.length}개)`;
+    $('#edit-files').innerHTML = fileState.map((file, index) => {
+      const kind = file.replaceItem ? file.replaceItem.kind : file.kind;
+      const src = file.replaceItem
+        ? `/__api/thumb?id=${encodeURIComponent(file.replaceItem.id)}&t=${encodeURIComponent(TOKEN)}`
+        : fileUrl(file);
+      const thumb = kind === 'image' ? `<img src="${esc(src)}" alt="" loading="lazy">` : esc(KIND_LABEL[kind] || 'FILE');
+      const shown = file.renameTo ? `${baseName(file.name)} → ${file.renameTo}` : file.name;
+      const states = [];
+      if (file.removed) states.push('<span class="attach-state pending">삭제 예정</span>');
+      if (file.renameTo) states.push('<span class="attach-state pending">이름 변경 예정</span>');
+      if (file.replaceItem) states.push(`<span class="attach-state pending">교체 예정: ${esc(file.replaceItem.name)}</span>`);
+      if (!file.removed) states.push(`<span class="attach-state">${file.embedded ? '본문에 표시' : file.used_by.length ? '문서가 참조' : '본문에 없음'}</span>`);
+      const blocked = blockers(file);
+      const lockNote = blocked.length ? `${blocked[0]} 문서가 참조 중이라 바꿀 수 없습니다` : '';
+      const lock = blocked.length ? ` disabled title="${esc(lockNote)}"` : '';
+      const at = pool.indexOf(file);
+      const buttons = file.removed
+        ? '<button class="icon-btn" type="button" data-file="restore" title="되살리기" aria-label="되살리기">↺</button>'
+        : (file.embedded
+          ? `<button class="icon-btn" type="button" data-file="up" title="본문에서 위로" aria-label="본문에서 위로"${at <= 0 ? ' disabled' : ''}>↑</button>`
+            + `<button class="icon-btn" type="button" data-file="down" title="본문에서 아래로" aria-label="본문에서 아래로"${at >= pool.length - 1 ? ' disabled' : ''}>↓</button>`
+          : '<button class="icon-btn" type="button" data-file="insert" title="본문 끝에 넣기" aria-label="본문 끝에 넣기">＋</button>')
+          + `<button class="icon-btn" type="button" data-file="rename" aria-label="이름 바꾸기"${lock || ' title="이름 바꾸기"'}>✎</button>`
+          + '<button class="icon-btn" type="button" data-file="replace" title="다른 파일로 교체" aria-label="다른 파일로 교체">⇄</button>'
+          + `<button class="icon-btn" type="button" data-file="remove" aria-label="삭제"${lock || ' title="삭제"'}>✕</button>`;
+      const pdf = kind === 'pdf' && file.embedded && !file.removed
+        ? `<label class="opt"><input type="checkbox" data-file-opt="join"${file.joinedNow ? ' checked' : ''}> 필기처럼 쪽을 틈 없이 이어 붙이기</label>`
+        : '';
+      return `<li class="item${file.removed ? ' removed' : ''}" data-index="${index}">`
+        + `<span class="kind ${esc(kind)}">${thumb}</span>`
+        + '<div class="item-main">'
+        + `<div class="item-name" title="${esc(shown)}">${esc(shown)}</div>`
+        + `<div class="item-sub">${states.join('')}${esc(file.size_text)}</div>`
+        + pdf
+        + '</div>'
+        + `<div class="item-btns">${buttons}</div>`
+        + '</li>';
+    }).join('') || '<li class="muted small">첨부 파일이 없습니다.</li>';
+  }
+
+  $('#edit-files').addEventListener('change', (event) => {
+    if (!event.target.matches('[data-file-opt="join"]')) return;
+    fileState[Number(event.target.closest('.item').dataset.index)].joinedNow = event.target.checked;
+  });
+
+  $('#edit-files').addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-file]');
+    if (!button || button.disabled) return;
+    const file = fileState[Number(button.closest('.item').dataset.index)];
+    const action = button.dataset.file;
+    if (action === 'up' || action === 'down') {
+      const pool = fileState.filter((f) => f.embedded && !f.removed);
+      const other = pool[pool.indexOf(file) + (action === 'up' ? -1 : 1)];
+      if (other) {
+        const i = fileState.indexOf(file);
+        const j = fileState.indexOf(other);
+        [fileState[i], fileState[j]] = [fileState[j], fileState[i]];
+      }
+    } else if (action === 'insert') {
+      const attrs = file.kind === 'pdf' ? (file.joinedNow ? '{.joined}' : '{.pages}') : '';
+      const body = $('#edit-body');
+      body.value = `${body.value.replace(/\s+$/, '')}${body.value.trim() ? '\n\n' : ''}![](<${file.name}>)${attrs}\n`;
+      file.embedded = true;
+      file.joined = file.joinedNow;
+      editOrder.push(file.name);
+      const lastEmbedded = fileState.reduce((last, f, i) => (f.embedded && f !== file ? i : last), -1);
+      fileState.splice(fileState.indexOf(file), 1);
+      fileState.splice(lastEmbedded + 1, 0, file);
+    } else if (action === 'rename') {
+      const current = file.renameTo || baseName(file.name);
+      const dot = current.lastIndexOf('.');
+      const next = await askName({
+        title: '첨부 파일 이름 바꾸기',
+        hint: '본문의 링크도 함께 바뀝니다. 확장자는 그대로 두세요.',
+        value: current,
+        selectEnd: dot > 0 ? dot : current.length,
+      });
+      if (next === null || !next) return;
+      if (extOf(next) !== extOf(file.name)) { toast('확장자는 바꿀 수 없습니다. 다른 형식은 교체 버튼을 쓰세요.', 'error'); return; }
+      file.renameTo = next === baseName(file.name) ? '' : next;
+    } else if (action === 'replace') {
+      replaceTarget = file;
+      $('#edit-replace-input').value = '';
+      $('#edit-replace-input').click();
+      return;
+    } else if (action === 'remove') {
+      file.removed = true;
+    } else if (action === 'restore') {
+      file.removed = false;
+    }
+    renderFiles();
+  });
+
+  $('#edit-replace-input').addEventListener('change', async (event) => {
+    const chosen = event.target.files[0];
+    if (!chosen || !replaceTarget) return;
     try {
-      await withBusy('저장하는 중…', () => api('post/update', payload));
-      closeModal($('#edit-modal'));
-      toast('저장했습니다. [게시하기]를 누르면 블로그에 반영됩니다.');
-      await refreshMeta();
+      replaceTarget.replaceItem = await withBusy('파일을 가져오는 중…', () => upload(chosen));
+      renderFiles();
     } catch (error) { fail(error); }
   });
+
+  async function openEdit(slug) {
+    try {
+      const post = await withBusy('글을 불러오는 중…', () => api('post?slug=' + encodeURIComponent(slug)));
+      editing = post;
+      $('#edit-heading').textContent = '글 수정';
+      $('#edit-title').value = post.title;
+      $('#edit-slug').value = post.slug;
+      $('#edit-date').value = post.date;
+      $('#edit-category').value = post.category;
+      editTags.set(post.tags);
+      $('#edit-description').value = post.description;
+      $('#edit-draft').checked = post.draft;
+      $('#edit-pin').checked = post.pin;
+      $('#edit-body').value = post.body;
+      $('#edit-view').href = post.url;
+      fileState = post.files.map((f) => ({ ...f, joinedNow: f.joined, removed: false, renameTo: '', replaceItem: null }));
+      editOrder = fileState.filter((f) => f.embedded).map((f) => f.name);
+      $('#edit-files-field').hidden = post.single;
+      $('#edit-drop').hidden = post.single;
+      editList.clear();
+      renderFiles();
+      editSnapshot = JSON.stringify(editPayload());
+      openModal('#edit-modal');
+    } catch (error) { fail(error); }
+  }
+
+  $('#edit-pick').addEventListener('click', async () => {
+    try { editList.add((await api('pick', { mode: 'files' })).items); } catch (error) { fail(error); }
+  });
+
+  async function saveEdit(publishNow) {
+    if (!editing) return;
+    editTags.flush();
+    const payload = editPayload();
+    if (!payload.title) { toast('제목을 적어 주세요.', 'error'); $('#edit-title').focus(); return; }
+    try {
+      const saved = await withBusy(publishNow ? 'GitHub에 올리는 중…' : '저장하는 중…', async () => {
+        const result = await api('post/update', payload);
+        if (publishNow) {
+          try {
+            result.publish = await api('publish', { message: `글 수정: ${payload.title}` });
+          } catch (error) {
+            result.publish = { ok: false, log: error.message };
+          }
+        }
+        return result;
+      });
+      editing = null;
+      closeModal($('#edit-modal'));
+      if (saved.publish) showLog(saved.publish);
+      if (saved.warnings && saved.warnings.length) toast(`저장했지만 확인이 필요합니다: ${saved.warnings.join(' / ')}`, 'error');
+      else if (!saved.publish) toast('저장했습니다. [게시하기]를 누르면 블로그에 반영됩니다.');
+      await refreshMeta();
+    } catch (error) { fail(error); }
+  }
+  $('#edit-save').addEventListener('click', () => saveEdit(false));
+  $('#edit-save-publish').addEventListener('click', () => saveEdit(true));
 
   $('#edit-delete').addEventListener('click', async () => {
     if (!editing) return;
     if (!window.confirm(`'${editing.title}' 글과 첨부 파일을 지울까요?\n[게시하기]를 누르기 전까지는 블로그에 그대로 남아 있습니다.`)) return;
     try {
       await withBusy('지우는 중…', () => api('post/delete', { slug: editing.slug }));
+      editing = null;
       closeModal($('#edit-modal'));
       toast('지웠습니다. [게시하기]를 누르면 블로그에서도 사라집니다.');
       await refreshMeta();
@@ -583,26 +771,176 @@
   $('#edit-folder').addEventListener('click', () => { if (editing) api('open', { slug: editing.slug }).catch(fail); });
 
   const tagOptions = () => META.tags;
-  const catOptions = () => META.categories;
   Suggest($('#rename-tag-from'), tagOptions, { allowNew: false, prefix: '#', onPick: (name) => { $('#rename-tag-from').value = name; } });
   Suggest($('#rename-tag-to'), tagOptions, { prefix: '#', onPick: (name) => { $('#rename-tag-to').value = name; } });
-  Suggest($('#rename-cat-from'), catOptions, { allowNew: false, onPick: (name) => { $('#rename-cat-from').value = name; } });
-  Suggest($('#rename-cat-to'), catOptions, { onPick: (name) => { $('#rename-cat-to').value = name; } });
 
-  const rename = async (kind) => {
-    const from = $(kind === 'tag' ? '#rename-tag-from' : '#rename-cat-from').value.trim();
-    const to = $(kind === 'tag' ? '#rename-tag-to' : '#rename-cat-to').value.trim();
+  $('#rename-tag').addEventListener('click', async () => {
+    const from = $('#rename-tag-from').value.trim();
+    const to = $('#rename-tag-to').value.trim();
     if (!from || !to) { toast('바꿀 이름과 새 이름을 모두 적어 주세요.', 'error'); return; }
     try {
-      const result = await withBusy('바꾸는 중…', () => api('rename', { kind, old: from, new: to }));
+      const result = await withBusy('바꾸는 중…', () => api('rename', { kind: 'tag', old: from, new: to }));
       toast(result.changed ? `글 ${result.changed}개를 바꿨습니다. [게시하기]를 누르면 반영됩니다.` : '바꿀 글이 없습니다.', result.changed ? undefined : 'error');
-      $(kind === 'tag' ? '#rename-tag-from' : '#rename-cat-from').value = '';
-      $(kind === 'tag' ? '#rename-tag-to' : '#rename-cat-to').value = '';
+      $('#rename-tag-from').value = '';
+      $('#rename-tag-to').value = '';
       await refreshMeta();
     } catch (error) { fail(error); }
+  });
+
+  /* ---------------- categories ---------------- */
+
+  let catDirty = false;
+  let catTree = [];
+  let catDragPath = '';
+  const catRoot = $('#cat-tree');
+
+  const flatCats = (list = catTree) => list.flatMap((node) => [node.path, ...flatCats(node.children)]);
+  const findCat = (path, list = catTree) => {
+    for (const node of list) {
+      if (node.path === path) return { node, siblings: list };
+      const inner = findCat(path, node.children);
+      if (inner) return inner;
+    }
+    return null;
   };
-  $('#rename-tag').addEventListener('click', () => rename('tag'));
-  $('#rename-cat').addEventListener('click', () => rename('category'));
+  const setCatDirty = (on) => {
+    catDirty = on;
+    $('#cats-save').disabled = !on;
+    $('#cats-reset').disabled = !on;
+  };
+
+  const catRows = (list) => list.map((node, index) => {
+    const name = esc(node.name);
+    return `<li><div class="cat-row" draggable="true" data-path="${esc(node.path)}">`
+      + '<span class="cat-grip" aria-hidden="true">⠿</span>'
+      + `<span class="cat-label" title="${esc(node.path)}">${name}</span>`
+      + `<span class="cat-count">글 ${node.count}개</span>`
+      + '<span class="cat-btns">'
+      + `<button class="icon-btn" type="button" data-cat="up" title="위로" aria-label="${name} 위로"${index === 0 ? ' disabled' : ''}>↑</button>`
+      + `<button class="icon-btn" type="button" data-cat="down" title="아래로" aria-label="${name} 아래로"${index === list.length - 1 ? ' disabled' : ''}>↓</button>`
+      + `<button class="icon-btn" type="button" data-cat="child" title="하위 카테고리 추가" aria-label="${name}에 하위 카테고리 추가">＋</button>`
+      + `<button class="icon-btn" type="button" data-cat="rename" title="이름 바꾸기" aria-label="${name} 이름 바꾸기">✎</button>`
+      + `<button class="icon-btn" type="button" data-cat="delete" title="${node.count ? '글이 있어 지울 수 없습니다' : '삭제'}" aria-label="${name} 삭제"${node.count ? ' disabled' : ''}>✕</button>`
+      + '</span></div>'
+      + (node.children.length ? `<ul>${catRows(node.children)}</ul>` : '')
+      + '</li>';
+  }).join('');
+  const renderCats = () => {
+    catRoot.innerHTML = catRows(catTree) || '<li class="muted small">카테고리가 없습니다.</li>';
+  };
+
+  function loadCats() {
+    const nodes = new Map();
+    catTree = [];
+    for (const category of META.categories) {
+      const parts = category.name.split('/');
+      const node = { path: category.name, name: parts[parts.length - 1], count: category.count, children: [] };
+      nodes.set(category.name, node);
+      const parent = nodes.get(parts.slice(0, -1).join('/'));
+      (parent ? parent.children : catTree).push(node);
+    }
+    setCatDirty(false);
+    renderCats();
+  }
+
+  async function addCat(parent) {
+    const name = await askName({
+      title: parent ? `${parent.name}에 하위 카테고리 추가` : '카테고리 추가',
+      hint: '이름만 적으세요. 비어 있어도 사이드바에 보입니다.',
+    });
+    if (!name) return;
+    if (name.includes('/')) { toast('이름에는 / 를 쓸 수 없습니다.', 'error'); return; }
+    const siblings = parent ? parent.children : catTree;
+    if (siblings.some((node) => node.name.toLowerCase() === name.toLowerCase())) { toast('같은 이름의 카테고리가 이미 있습니다.', 'error'); return; }
+    siblings.push({ path: parent ? `${parent.path}/${name}` : name, name, count: 0, children: [] });
+    setCatDirty(true);
+    renderCats();
+  }
+
+  async function renameCat(node) {
+    const next = await askName({
+      title: '카테고리 이름 바꾸기',
+      hint: '/ 로 위치도 옮길 수 있습니다. 이미 있는 이름으로 바꾸면 둘이 합쳐집니다.',
+      value: node.path,
+    });
+    if (!next || next === node.path) return;
+    try {
+      await withBusy('바꾸는 중…', async () => {
+        if (catDirty) await api('categories', { order: flatCats() });
+        await api('rename', { kind: 'category', old: node.path, new: next });
+      });
+      setCatDirty(false);
+      await refreshMeta();
+      toast('이름을 바꿨습니다. [게시하기]를 누르면 반영됩니다.');
+    } catch (error) { fail(error); }
+  }
+
+  catRoot.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-cat]');
+    if (!button || button.disabled) return;
+    const { node, siblings } = findCat(button.closest('.cat-row').dataset.path);
+    const action = button.dataset.cat;
+    if (action === 'child') { addCat(node); return; }
+    if (action === 'rename') { renameCat(node); return; }
+    const at = siblings.indexOf(node);
+    if (action === 'up' && at > 0) [siblings[at - 1], siblings[at]] = [siblings[at], siblings[at - 1]];
+    if (action === 'down' && at < siblings.length - 1) [siblings[at + 1], siblings[at]] = [siblings[at], siblings[at + 1]];
+    if (action === 'delete') siblings.splice(at, 1);
+    setCatDirty(true);
+    renderCats();
+  });
+
+  const clearCatDrop = () => $$('.drop-before, .drop-after', catRoot).forEach((row) => row.classList.remove('drop-before', 'drop-after'));
+  catRoot.addEventListener('dragstart', (event) => {
+    const row = event.target.closest('.cat-row');
+    if (!row) return;
+    catDragPath = row.dataset.path;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', catDragPath);
+    row.classList.add('dragging');
+  });
+  catRoot.addEventListener('dragover', (event) => {
+    const row = event.target.closest('.cat-row');
+    clearCatDrop();
+    if (!row || !catDragPath || row.dataset.path === catDragPath) return;
+    if (findCat(catDragPath).siblings !== findCat(row.dataset.path).siblings) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    const box = row.getBoundingClientRect();
+    row.classList.add(event.clientY < box.top + box.height / 2 ? 'drop-before' : 'drop-after');
+  });
+  catRoot.addEventListener('drop', (event) => {
+    const row = event.target.closest('.cat-row');
+    if (!row || !catDragPath) return;
+    event.preventDefault();
+    const after = row.classList.contains('drop-after');
+    const valid = after || row.classList.contains('drop-before');
+    clearCatDrop();
+    if (!valid) return;
+    const { node, siblings } = findCat(catDragPath);
+    siblings.splice(siblings.indexOf(node), 1);
+    const at = siblings.indexOf(findCat(row.dataset.path).node);
+    siblings.splice(after ? at + 1 : at, 0, node);
+    catDragPath = '';
+    setCatDirty(true);
+    renderCats();
+  });
+  catRoot.addEventListener('dragend', () => {
+    catDragPath = '';
+    clearCatDrop();
+    $$('.dragging', catRoot).forEach((row) => row.classList.remove('dragging'));
+  });
+
+  $('#cats-add').addEventListener('click', () => addCat(null));
+  $('#cats-reset').addEventListener('click', loadCats);
+  $('#cats-save').addEventListener('click', async () => {
+    try {
+      await withBusy('저장하는 중…', () => api('categories', { order: flatCats() }));
+      setCatDirty(false);
+      await refreshMeta();
+      toast('순서를 저장했습니다. [게시하기]를 누르면 블로그에 반영됩니다.');
+    } catch (error) { fail(error); }
+  });
 
   /* ---------------- publish ---------------- */
 
@@ -664,7 +1002,7 @@
   });
 
   window.addEventListener('beforeunload', (event) => {
-    if (newList.get().length || $('#intro').value.trim()) {
+    if (newList.get().length || $('#intro').value.trim() || catDirty || isEditDirty()) {
       event.preventDefault();
       event.returnValue = '';
     }
