@@ -1,5 +1,5 @@
 ---
-title: 2026_ICCV_LongSplat
+title: 2025_ICCV_LongSplat
 date: 2026-09-26 18:13
 category: 논문 리뷰/3DGS
 tags: [LongSplat, 3DGS, ICCV 2025, 필기]
